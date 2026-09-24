@@ -231,6 +231,9 @@ textarea::placeholder{color:var(--ink-3)}
     <label>Délai avant envoi
       <select id="silence"><option value="800">Court</option><option value="1100">Normal</option><option value="1600">Long</option></select>
     </label>
+    <label>Écoute à l'ouverture
+      <select id="autoListen"><option value="0">Non</option><option value="1">Oui, micro prêt dès que Jarvis s'ouvre</option></select>
+    </label>
     <button class="iconbtn wide" id="testVoice" type="button">Tester la voix</button>
 
     <h3>Diagnostic</h3>
@@ -257,7 +260,7 @@ textarea::placeholder{color:var(--ink-3)}
   const cfg = Object.assign({
     provider: "claude", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
-    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true,
+    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0",
     tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: ""
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
@@ -932,7 +935,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = cfg.provider === "deepseek" ? "DeepSeek" : "Claude"; $("modeInfo").textContent = (cfg.provider === "deepseek" ? cfg.dsModel : cfg.claudeModel.replace(/-\d{8}$/,"")); }
@@ -992,6 +995,15 @@ textarea::placeholder{color:var(--ink-3)}
   (store.get("timers", []) || []).forEach(t => { timers.push({ ...t }); });
   timers.forEach(t => { if(!t.done){ if(t.end > Date.now()){ schedule(t); keepAwake(true); } else fireTimer(t.id); } });
   renderTimers();
+  // "Dis Jarvis" (iOS vocal shortcut) opens the app: start listening right away if asked to
+  const wantsAutoListen = () => cfg.autoListen === "1" || /[?&#]ecoute\b/.test(location.search + location.hash);
+  function autoListen(){
+    if(!SR || !wantsAutoListen() || keyMissing() || conv || busy || speaking) return;
+    conv = true; setMicUI(); startListening();
+    setTimeout(() => { if(conv && !listening && !busy && !speaking){ conv = false; setMicUI(); setMode("idle", "Touche le micro pour parler."); } }, 2500);
+  }
+  if(location.protocol !== "file:") setTimeout(autoListen, 400);
+  document.addEventListener("visibilitychange", () => { if(!document.hidden) setTimeout(autoListen, 400); });
   if(location.protocol === "file:") addMsg("sys", "Ouvre cette page depuis une adresse https (GitHub Pages) : Safari bloque le micro et les appels réseau sur un fichier local.");
 })();
 </script>
