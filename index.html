@@ -47,6 +47,7 @@ canvas#orb{width:76px;height:76px;flex:none;cursor:pointer}
 .chip{font:500 12px var(--mono);background:var(--panel-2);border:1px solid var(--line);color:var(--brass);border-radius:999px;padding:3px 10px;display:inline-flex;gap:8px;align-items:center;font-variant-numeric:tabular-nums}
 .chip button{all:unset;cursor:pointer;color:var(--ink-3);font-size:13px;line-height:1;padding:0 2px}
 .chip.done{color:var(--alert);border-color:var(--alert)}
+.unlock{appearance:none;margin-top:6px;border:1px solid var(--brass);background:transparent;color:var(--brass);border-radius:999px;padding:5px 12px;font:600 13px var(--body);cursor:pointer}
 .log{flex:1;overflow-y:auto;padding-block:14px;display:flex;flex-direction:column;gap:12px;-webkit-overflow-scrolling:touch}
 .msg{max-width:88%;white-space:pre-wrap;word-wrap:break-word}
 .msg.user{align-self:flex-end;background:var(--panel-2);border:1px solid var(--line);padding:9px 13px;border-radius:14px 14px 4px 14px}
@@ -123,6 +124,7 @@ textarea::placeholder{color:var(--ink-3)}
     <div class="status">
       <div class="state" id="state">En veille</div>
       <div class="detail" id="detail">Touche le micro pour parler.</div>
+      <button class="unlock" id="unlockHint" type="button" hidden>🔈 Touche ici pour activer la voix</button>
       <div class="timers" id="timers"></div>
     </div>
   </section>
@@ -366,12 +368,24 @@ textarea::placeholder{color:var(--ink-3)}
   // one <audio> element, unlocked by the first touch, plays every ElevenLabs chunk (it also ignores the silent switch)
   const player = new Audio(); player.setAttribute("playsinline", ""); player.preload = "auto";
   const SILENT = "data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAAAACAgICAgICAgICAgICAgICA";
+  // iOS only lets a page make sound after a touch: until then, replies are kept and spoken on the first touch
+  let pendingSpeech = "";
+  const showUnlockHint = on => { $("unlockHint").hidden = !on; };
   function unlockAudio(){
     if(unlocked) return; unlocked = true;
+    showUnlockHint(false);
     try{ if(navigator.audioSession) navigator.audioSession.type = "playback"; }catch{}
     try{ player.src = SILENT; player.play().catch(() => {}); }catch{}
     try{ if(synth){ const u = new SpeechSynthesisUtterance("ok"); u.volume = .01; u.rate = 2; u.lang = "fr-FR"; synth.speak(u); } }catch{}
-    try{ actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume?.(); }catch{}
+    try{ if(!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume?.(); }catch{}
+    if(pendingSpeech){ const t = pendingSpeech; pendingSpeech = ""; speakAppend(t, true); }   // still inside the touch: iOS accepts it
+  }
+  function voiceBlocked(text){
+    pendingSpeech = [pendingSpeech, text, ...queue.map(q => q.text)].filter(Boolean).join(" ");
+    queue.length = 0; speaking = false; unlocked = false;
+    diag.voix = "bloquée par iOS : touche l'écran";
+    showUnlockHint(true);
+    afterSpeech();
   }
   ["touchend","click","keydown"].forEach(ev => document.addEventListener(ev, unlockAudio, {capture:true, passive:true}));
 
@@ -391,13 +405,16 @@ textarea::placeholder{color:var(--ink-3)}
     if((!cfg.speak && !force) || !text || !text.trim()) return;
     const eleven = useEleven();
     if(!eleven && !synth) return;
+    if(!unlocked){   // no touch yet: iOS would stay silent, keep it for the first touch
+      pendingSpeech = (pendingSpeech ? pendingSpeech + " " : "") + text.trim();
+      showUnlockHint(true); return;
+    }
     const parts = chunkText(text); if(!parts.length) return;
     queue.push(...parts.map(t => ({ text: t, p: null })));
     if(eleven && !queue[0].p) queue[0].p = elFetch(queue[0].text);   // start fetching at once
     if(!speaking){
       speaking = true; started = false; stopListening();
       speakNext();
-      if(!eleven) setTimeout(() => { if(speaking && !started && !synth.speaking){ diag.voix = "bloquée (mode silencieux ?)"; speaking = false; queue.length = 0; afterSpeech(); } }, 3000);
     }
   }
   function speak(text, force = false){ stopSpeaking(); setTimeout(() => speakAppend(text, force), 60); }
@@ -411,7 +428,9 @@ textarea::placeholder{color:var(--ink-3)}
     const u = new SpeechSynthesisUtterance(text);
     const v = voices.find(x => x.voiceURI === cfg.voice); if(v) u.voice = v;
     u.lang = v?.lang || "fr-FR"; u.rate = Number(cfg.rate) || 1.05;
-    u.onstart = () => { started = true; if(!useEleven()) diag.voix = "OK"; setMode("speaking"); };
+    const gen = ttsGen; let ok = false;
+    u.onstart = () => { ok = started = true; if(!useEleven()) diag.voix = "OK"; setMode("speaking"); };
+    setTimeout(() => { if(gen === ttsGen && speaking && !ok && !synth.speaking) voiceBlocked(text); }, 3000);
     u.onend = speakNext;
     u.onerror = e => { if(e.error !== "interrupted" && e.error !== "canceled") diag.voix = "erreur : " + e.error; speakNext(); };
     try{ synth.speak(u); }catch{ speakNext(); }
@@ -457,8 +476,7 @@ textarea::placeholder{color:var(--ink-3)}
     }catch{
       player.onended = player.onerror = null; URL.revokeObjectURL(url);
       if(gen !== ttsGen) return;
-      diag.voix = "ElevenLabs bloqué par iOS → voix de l'iPhone";
-      speakSynth(item.text);
+      voiceBlocked(item.text);
     }
   }
   function stopSpeaking(){
@@ -1000,6 +1018,7 @@ textarea::placeholder{color:var(--ink-3)}
   function autoListen(){
     if(!SR || !wantsAutoListen() || keyMissing() || conv || busy || speaking) return;
     conv = true; setMicUI(); startListening();
+    if(!unlocked) showUnlockHint(true);
     setTimeout(() => { if(conv && !listening && !busy && !speaking){ conv = false; setMicUI(); setMode("idle", "Touche le micro pour parler."); } }, 2500);
   }
   if(location.protocol !== "file:") setTimeout(autoListen, 400);
