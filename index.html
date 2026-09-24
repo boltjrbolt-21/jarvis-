@@ -236,6 +236,9 @@ textarea::placeholder{color:var(--ink-3)}
     <label>Écoute à l'ouverture
       <select id="autoListen"><option value="0">Non</option><option value="1">Oui, micro prêt dès que Jarvis s'ouvre</option></select>
     </label>
+    <label>Dire « stop » pour couper
+      <select id="stopWord"><option value="1">Oui</option><option value="0">Non</option></select>
+    </label>
     <button class="iconbtn wide" id="testVoice" type="button">Tester la voix</button>
 
     <h3>Diagnostic</h3>
@@ -262,7 +265,7 @@ textarea::placeholder{color:var(--ink-3)}
   const cfg = Object.assign({
     provider: "claude", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
-    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0",
+    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
     tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: ""
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
@@ -382,7 +385,7 @@ textarea::placeholder{color:var(--ink-3)}
   }
   function voiceBlocked(text){
     pendingSpeech = [pendingSpeech, text, ...queue.map(q => q.text)].filter(Boolean).join(" ");
-    queue.length = 0; speaking = false; unlocked = false;
+    queue.length = 0; speaking = false; unlocked = false; stopWatch();
     diag.voix = "bloquée par iOS : touche l'écran";
     showUnlockHint(true);
     afterSpeech();
@@ -413,13 +416,13 @@ textarea::placeholder{color:var(--ink-3)}
     queue.push(...parts.map(t => ({ text: t, p: null })));
     if(eleven && !queue[0].p) queue[0].p = elFetch(queue[0].text);   // start fetching at once
     if(!speaking){
-      speaking = true; started = false; stopListening();
+      speaking = true; started = false; stopListening(); startStopWatch();
       speakNext();
     }
   }
   function speak(text, force = false){ stopSpeaking(); setTimeout(() => speakAppend(text, force), 60); }
   function speakNext(){
-    if(!queue.length){ speaking = false; afterSpeech(); return; }
+    if(!queue.length){ speaking = false; stopWatch(); afterSpeech(); return; }
     const item = queue.shift();
     if(useEleven()) playEleven(item); else speakSynth(item.text);
   }
@@ -480,7 +483,7 @@ textarea::placeholder{color:var(--ink-3)}
     }
   }
   function stopSpeaking(){
-    ttsGen++; queue.length = 0; speaking = false;
+    ttsGen++; queue.length = 0; speaking = false; stopWatch();
     elCtl.abort(); elCtl = new AbortController();
     try{ player.onended = player.onerror = null; player.pause(); }catch{}
     try{ synth?.cancel(); }catch{}
@@ -550,12 +553,34 @@ textarea::placeholder{color:var(--ink-3)}
       rec.start();
     }catch(err){ diag.micro = "indisponible : " + err.message; listening = false; setMicUI(); }
   }
+  // ---- "stop" while Jarvis speaks: a second recognizer listens only for a short stop word ----
+  const STOP_RE = /^(stop+|stoppe|arr[êe]te(-toi)?|tais[- ]toi|chut|silence|ça suffit|c'est bon)[\s.!,]*$/i;
+  const isStop = t => STOP_RE.test(t.trim().replace(/^(jarvis|ok|bon)[\s,]+/i, ""));
+  let stopRec = null;
+  function startStopWatch(){
+    if(!SR || cfg.stopWord === "0" || !conv || stopRec) return;
+    try{
+      const r = new SR(); r.lang = "fr-FR"; r.interimResults = true; r.continuous = true;
+      r.onresult = e => {
+        // only short utterances count, so Jarvis' own voice saying "arrête" mid-sentence is ignored
+        for(let k = e.resultIndex; k < e.results.length; k++){
+          const t = e.results[k][0].transcript;
+          if(t.trim().split(/\s+/).length <= 3 && isStop(t)){ stopSpeaking(); afterSpeech(); return; }
+        }
+      };
+      r.onerror = () => {};
+      r.onend = () => { if(stopRec === r){ stopRec = null; if(speaking) setTimeout(startStopWatch, 200); } };
+      stopRec = r; r.start();
+    }catch{ stopRec = null; }
+  }
+  function stopWatch(){ const r = stopRec; stopRec = null; if(r){ try{ r.onend = r.onresult = null; r.abort(); }catch{} } }
   function stopListening(){ clearTimeout(silenceT); if(rec){ try{ rec.onend = () => { listening = false; setMicUI(); }; rec.abort(); }catch{} } rec = null; listening = false; setMicUI(); }
   function commitSpeech(){
     clearTimeout(silenceT);
     const t = (input.value || heard).trim(); heard = "";
     stopListening();
     if(!t) return;
+    if(isStop(t)) return;   // a lone "stop" is a command, not a question
     input.value = ""; autosize();
     send(t);
   }
@@ -953,7 +978,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = cfg.provider === "deepseek" ? "DeepSeek" : "Claude"; $("modeInfo").textContent = (cfg.provider === "deepseek" ? cfg.dsModel : cfg.claudeModel.replace(/-\d{8}$/,"")); }
