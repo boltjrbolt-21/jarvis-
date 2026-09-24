@@ -245,6 +245,13 @@ textarea::placeholder{color:var(--ink-3)}
     <ul class="memlist" id="diag"></ul>
     <h3>Mémoire long terme</h3>
     <ul class="memlist" id="memlist"></ul>
+    <button class="iconbtn wide" id="impOpen" type="button">Importer ma mémoire claude.ai</button>
+    <div id="impBox" hidden>
+      <p class="note">1. Copie la consigne, colle-la dans une conversation claude.ai et envoie-la.<br>2. Copie la réponse de Claude, colle-la ci-dessous, puis touche Importer.</p>
+      <button class="iconbtn wide" id="impPrompt" type="button">Copier la consigne pour Claude</button>
+      <textarea id="impText" rows="7" placeholder="Colle ici la réponse de Claude (un fait par ligne)" style="width:100%;margin-top:10px;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:8px;font:14px/1.4 var(--body);max-height:none"></textarea>
+      <button class="iconbtn wide" id="impGo" type="button">Importer</button>
+    </div>
     <h3>Notes</h3>
     <ul class="memlist" id="notelist"></ul>
     <button class="iconbtn wide" id="clearChat" type="button">Effacer la conversation</button>
@@ -270,6 +277,7 @@ textarea::placeholder{color:var(--ink-3)}
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
   let memories = store.get("mem", []);
+  const MEM_MAX = 150;
   let notes = store.get("notes", []);
   let turns = store.get("turns", []);           // [{role, content(string)}]
   let timers = [];
@@ -691,7 +699,7 @@ textarea::placeholder{color:var(--ink-3)}
       run: i => { const l = String(i.label || "").toLowerCase(); const hit = timers.filter(t => l === "tous" || t.label.toLowerCase().includes(l)); hit.forEach(t => removeTimer(t.id)); toolLog.push("minuteur annulé"); return { annules: hit.length }; } },
     { name:"remember", description:"Mémorise un fait durable sur l'utilisateur.",
       parameters: obj({ fact:{type:"string"} }, ["fact"]),
-      run: i => { const f = String(i.fact || "").trim().slice(0,200); if(!f) throw new Error("Fait vide."); memories.push(f); if(memories.length > 80) memories.shift(); store.set("mem", memories); toolLog.push("mémorisé"); return { ok:true }; } },
+      run: i => { const f = String(i.fact || "").trim().slice(0,200); if(!f) throw new Error("Fait vide."); memories.push(f); if(memories.length > MEM_MAX) memories.shift(); store.set("mem", memories); toolLog.push("mémorisé"); return { ok:true }; } },
     { name:"forget", description:"Supprime de la mémoire les faits contenant ce texte.",
       parameters: obj({ contains:{type:"string"} }, ["contains"]),
       run: i => { const c = String(i.contains || "").toLowerCase(); const b = memories.length; memories = memories.filter(m => !m.toLowerCase().includes(c)); store.set("mem", memories); toolLog.push("oublié"); return { supprimes: b - memories.length }; } },
@@ -1070,6 +1078,24 @@ textarea::placeholder{color:var(--ink-3)}
     if(!res.length) res.push("Aucune clé renseignée.");
     addMsg("sys", res.join("\n"));
     b.disabled = false; b.textContent = "Tester la connexion"; $("sheet").hidden = true;
+  };
+  // ---- import what claude.ai knows about the user into Jarvis' memory ----
+  const IMPORT_PROMPT = "Fais la liste de tout ce que tu sais sur moi et qui peut servir à un assistant personnel : prénom, études, ville, emploi du temps, habitudes, préférences, projets, personnes importantes, goûts. Un fait par ligne, sous forme de phrase courte à la troisième personne (ex. « Kévin étudie la pharmacie à Dijon »), sans titre, sans numéro, sans introduction ni conclusion.";
+  $("impOpen").onclick = () => { $("impBox").hidden = !$("impBox").hidden; };
+  $("impPrompt").onclick = () => {
+    const b = $("impPrompt");
+    navigator.clipboard?.writeText(IMPORT_PROMPT).then(() => { b.textContent = "Consigne copiée ✓ — ouverture de Claude…"; setTimeout(() => window.open("https://claude.ai/new?q=" + encodeURIComponent(IMPORT_PROMPT), "_blank", "noopener"), 400); },
+      () => { window.open("https://claude.ai/new?q=" + encodeURIComponent(IMPORT_PROMPT), "_blank", "noopener"); });
+  };
+  $("impGo").onclick = () => {
+    const known = new Set(memories.map(m => m.toLowerCase()));
+    const facts = $("impText").value.split(/\n+/)
+      .map(l => l.replace(/^\s*(?:[-•*·–—]|\d+[.)])\s*/, "").replace(/\*\*/g, "").trim().slice(0, 200))
+      .filter(l => l.length > 3 && !/:\s*$/.test(l) && !known.has(l.toLowerCase()) && known.add(l.toLowerCase()));
+    memories.push(...facts); while(memories.length > MEM_MAX) memories.shift();
+    store.set("mem", memories);
+    $("impText").value = ""; $("impBox").hidden = true; renderLists();
+    addMsg("sys", facts.length ? `${facts.length} fait${facts.length > 1 ? "s" : ""} importé${facts.length > 1 ? "s" : ""} dans la mémoire de Jarvis.` : "Rien à importer : colle la réponse de Claude, un fait par ligne.");
   };
   $("clearChat").onclick = () => { turns = []; saveTurns(); log.innerHTML = ""; addMsg("sys", "Conversation effacée. Mémoire et notes conservées."); $("sheet").hidden = true; };
   $("closeSheet").onclick = () => { $("sheet").hidden = true; };
