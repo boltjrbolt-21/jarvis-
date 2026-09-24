@@ -346,12 +346,15 @@ textarea::placeholder{color:var(--ink-3)}
   function loadVoices(){
     if(!synth) return;
     voices = synth.getVoices().filter(v => /^fr/i.test(v.lang));
-    const rank = v => (/(premium|enhanced|amélioré|siri)/i.test(v.name) ? 0 : 1) + (/fr-FR/i.test(v.lang) ? 0 : .5);
+    const q = v => /premium/i.test(v.voiceURI + v.name) ? 2 : /enhanced|amélioré/i.test(v.voiceURI + v.name) ? 1 : 0;
+    const rank = v => -q(v) + (/fr-FR/i.test(v.lang) ? 0 : .5);
     voices.sort((a,b) => rank(a) - rank(b));
     const sel = $("voiceSel"); sel.innerHTML = "";
     if(!voices.length){ const o = document.createElement("option"); o.textContent = "Voix système"; sel.append(o); return; }
-    voices.forEach(v => { const o = document.createElement("option"); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.append(o); });
-    if(!voices.some(v => v.name === cfg.voice)) cfg.voice = voices[0].name;
+    voices.forEach(v => { const o = document.createElement("option"); o.value = v.voiceURI; o.textContent = `${v.name}${["", " · améliorée", " · premium"][q(v)]} (${v.lang})`; sel.append(o); });
+    // voices are keyed by voiceURI: a compact and an enhanced voice can share the same name
+    const cur = voices.find(v => v.voiceURI === cfg.voice) || voices.find(v => v.name === cfg.voice);
+    cfg.voice = (cur || voices[0]).voiceURI;
     sel.value = cfg.voice; diag.voix = voices.length + " voix françaises";
   }
   if(synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
@@ -403,7 +406,7 @@ textarea::placeholder{color:var(--ink-3)}
   function speakSynth(text){
     if(!synth){ speakNext(); return; }
     const u = new SpeechSynthesisUtterance(text);
-    const v = voices.find(x => x.name === cfg.voice); if(v) u.voice = v;
+    const v = voices.find(x => x.voiceURI === cfg.voice); if(v) u.voice = v;
     u.lang = v?.lang || "fr-FR"; u.rate = Number(cfg.rate) || 1.05;
     u.onstart = () => { started = true; if(!useEleven()) diag.voix = "OK"; setMode("speaking"); };
     u.onend = speakNext;
