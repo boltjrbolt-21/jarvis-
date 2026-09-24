@@ -338,10 +338,11 @@ textarea::placeholder{color:var(--ink-3)}
     }
     log.append(el); scroll(); return el;
   }
-  function addAction(msgEl, label, href, raw){
+  function addAction(msgEl, label, href, raw, sameTab){
     let box = msgEl.querySelector(".actions");
     if(!box){ box = document.createElement("div"); box.className = "actions"; msgEl.append(box); }
-    const a = document.createElement("a"); a.className = "action"; a.href = href; a.target = "_blank"; a.rel = "noopener"; a.textContent = label + " ↗";
+    const a = document.createElement("a"); a.className = "action"; a.href = href; a.textContent = label + " ↗";
+    if(!sameTab){ a.target = "_blank"; a.rel = "noopener"; }
     box.append(a);
     if(raw){ const r = document.createElement("span"); r.className = "raw"; r.textContent = raw; box.append(r); }
     scroll();
@@ -692,6 +693,38 @@ textarea::placeholder{color:var(--ink-3)}
     { name:"show_link", description:"Affiche un bouton à toucher : itineraire, carte, recherche, web, appel, sms, musique, raccourci (Raccourci iOS, ex. lampes).",
       parameters: obj({ kind:{type:"string", enum:["itineraire","carte","recherche","web","appel","sms","musique","raccourci"]}, value:{type:"string"}, label:{type:"string"} }, ["kind","value","label"]),
       run: i => { const kind = String(i.kind), value = String(i.value || "").slice(0,300); const href = linkFor(kind, value); if(!href || !value) throw new Error("Lien impossible."); if(currentMsg) addAction(currentMsg, String(i.label || "Ouvrir").slice(0,40), href, ["appel","sms"].includes(kind) ? value : null); toolLog.push("lien"); return { ok:true }; } },
+    { name:"add_event", description:"Crée un rendez-vous ou un rappel daté dans le Calendrier de l'iPhone, avec une alerte qui sonne même si Jarvis est fermé. Affiche un bouton que l'utilisateur touche pour l'ajouter.",
+      parameters: obj({
+        title:{type:"string"},
+        start:{type:"string", description:"Date et heure locales (Europe/Paris), format AAAA-MM-JJTHH:MM"},
+        duration_minutes:{type:"number", description:"Durée, 60 par défaut, 15 pour un simple rappel"},
+        alert_minutes_before:{type:"number", description:"Alerte avant le début : 30 par défaut, 0 pour un rappel à l'heure pile"},
+        location:{type:"string"}, notes:{type:"string"}
+      }, ["title","start"]),
+      run: i => {
+        const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(String(i.start || ""));
+        if(!m) throw new Error("Date invalide, format attendu AAAA-MM-JJTHH:MM.");
+        const start = new Date(+m[1], m[2]-1, +m[3], +m[4], +m[5]);
+        const dur = Math.min(1440, Math.max(5, Math.round(Number(i.duration_minutes) || 60)));
+        const end = new Date(start.getTime() + dur*60000);
+        const before = Math.min(10080, Math.max(0, Math.round(Number(i.alert_minutes_before ?? 30) || 0)));
+        const title = String(i.title || "Rendez-vous").slice(0,120), loc = String(i.location || "").slice(0,200), notes = String(i.notes || "").slice(0,500);
+        const z = d => d.toISOString().replace(/[-:]/g,"").replace(/\.\d{3}/,"");
+        const esc = t => t.replace(/\\/g,"\\\\").replace(/;/g,"\\;").replace(/,/g,"\\,").replace(/\n/g,"\\n");
+        const ics = ["BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//Jarvis//FR","CALSCALE:GREGORIAN","BEGIN:VEVENT",
+          "UID:" + Date.now() + "-" + Math.random().toString(36).slice(2,8) + "@jarvis", "DTSTAMP:" + z(new Date()),
+          "DTSTART:" + z(start), "DTEND:" + z(end), "SUMMARY:" + esc(title),
+          ...(loc ? ["LOCATION:" + esc(loc)] : []), ...(notes ? ["DESCRIPTION:" + esc(notes)] : []),
+          "BEGIN:VALARM","ACTION:DISPLAY","DESCRIPTION:" + esc(title), "TRIGGER:-PT" + before + "M","END:VALARM",
+          "END:VEVENT","END:VCALENDAR"].join("\r\n");
+        const google = "https://calendar.google.com/calendar/render?action=TEMPLATE&text=" + encodeURIComponent(title) + "&dates=" + z(start) + "/" + z(end) + (loc ? "&location=" + encodeURIComponent(loc) : "") + (notes ? "&details=" + encodeURIComponent(notes) : "");
+        if(currentMsg){
+          addAction(currentMsg, "Ajouter au Calendrier", "data:text/calendar;charset=utf-8," + encodeURIComponent(ics), null, true);
+          addAction(currentMsg, "Google Agenda", google);
+        }
+        toolLog.push("calendrier");
+        return { ok:true, debut: start.toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"}), alerte_minutes_avant: before, a_faire: "l'utilisateur doit toucher « Ajouter au Calendrier » puis « Ajouter »" };
+      } },
     { name:"calculate", description:"Calcule une expression : + - * / ^ %, parenthèses, sqrt(). Ex. « 15% de 240 ».",
       parameters: obj({ expression:{type:"string"} }, ["expression"]),
       run: i => { toolLog.push("calcul"); return { resultat: calc(i.expression) }; } },
@@ -723,6 +756,7 @@ textarea::placeholder{color:var(--ink-3)}
       `Maintenant : ${nowLong()} (Europe/Paris).`,
       webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
+      "Jarvis s'arrête quand la page est fermée : mémoire et notes restent enregistrées, mais un minuteur ne sonne que si Jarvis reste ouvert. Pour un rendez-vous, un rappel à une date ou une heure, ou un minuteur long, utilise add_event (alerte du Calendrier de l'iPhone, fiable même Jarvis fermé) puis dis en une phrase de toucher « Ajouter au Calendrier ».",
       "Minuteurs en cours : " + (timers.filter(t => !t.done).map(t => `${t.label} (reste ${fmtLeft(t.end - Date.now())})`).join(", ") || "aucun") + ".",
       "Mémoire : " + (memories.length ? memories.map(m => "- " + m).join("\n") : "vide"),
       "Notes : " + (notes.length ? notes.map(n => "- " + n).join("\n") : "aucune")
