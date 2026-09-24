@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0C131C">
+<meta name="color-scheme" content="dark">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Jarvis">
+<meta name="format-detection" content="telephone=no">
+<title>Jarvis</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  color-scheme: dark;
+  --ground:#0C131C; --panel:#131E2A; --panel-2:#1A2837; --line:#26384A;
+  --ink:#E4ECF2; --ink-2:#9FB2C2; --ink-3:#6C8294;
+  --arc:#7CD4E4; --arc-dim:#2C5F6C; --brass:#D8A65E; --alert:#F08A6E; --ok:#8FD19E;
+  --display:"Chakra Petch","Avenir Next Condensed",system-ui,sans-serif;
+  --body:"IBM Plex Sans",-apple-system,system-ui,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,monospace;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%;margin:0}
+body{background:var(--ground);color:var(--ink);font:15px/1.5 var(--body);-webkit-font-smoothing:antialiased;overflow:hidden;-webkit-tap-highlight-color:transparent}
+.app{height:100%;display:flex;flex-direction:column;max-width:640px;margin:0 auto;padding-inline:max(16px,env(safe-area-inset-left)) max(16px,env(safe-area-inset-right))}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:calc(10px + env(safe-area-inset-top)) 6px}
+.brand{font-family:var(--display);font-weight:600;letter-spacing:.18em;text-transform:uppercase;font-size:14px;color:var(--arc)}
+.brand small{display:block;font-family:var(--mono);font-weight:400;letter-spacing:.04em;text-transform:none;color:var(--ink-3);font-size:11px}
+.hbtns{display:flex;gap:8px;align-items:center}
+.pill{font:500 11px var(--mono);color:var(--brass);border:1px solid var(--line);border-radius:999px;padding:4px 9px;background:transparent;cursor:pointer}
+.iconbtn{appearance:none;border:1px solid var(--line);background:var(--panel);color:var(--ink-2);border-radius:10px;height:36px;min-width:36px;padding:0 10px;font:500 12px var(--body);display:inline-flex;align-items:center;justify-content:center;gap:6px;cursor:pointer}
+.iconbtn[aria-pressed="true"]{color:var(--arc);border-color:var(--arc-dim)}
+button:focus-visible,textarea:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--arc);outline-offset:2px}
+.iconbtn svg{width:18px;height:18px}
+.core{display:flex;align-items:center;gap:14px;padding-block:6px 10px;border-bottom:1px solid var(--line)}
+canvas#orb{width:76px;height:76px;flex:none;cursor:pointer}
+.status{min-width:0;flex:1}
+.status .state{font-family:var(--display);font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--arc)}
+.status .state.listen{color:var(--ok)}
+.status .detail{color:var(--ink-2);font-size:13px;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.timers{display:flex;flex-wrap:wrap;gap:6px;margin-top:6px}
+.chip{font:500 12px var(--mono);background:var(--panel-2);border:1px solid var(--line);color:var(--brass);border-radius:999px;padding:3px 10px;display:inline-flex;gap:8px;align-items:center;font-variant-numeric:tabular-nums}
+.chip button{all:unset;cursor:pointer;color:var(--ink-3);font-size:13px;line-height:1;padding:0 2px}
+.chip.done{color:var(--alert);border-color:var(--alert)}
+.log{flex:1;overflow-y:auto;padding-block:14px;display:flex;flex-direction:column;gap:12px;-webkit-overflow-scrolling:touch}
+.msg{max-width:88%;white-space:pre-wrap;word-wrap:break-word}
+.msg.user{align-self:flex-end;background:var(--panel-2);border:1px solid var(--line);padding:9px 13px;border-radius:14px 14px 4px 14px}
+.msg.bot{align-self:flex-start;padding-left:12px;border-left:2px solid var(--arc-dim)}
+.msg.bot .who{display:block;font-family:var(--display);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin-bottom:2px}
+.msg.bot.thinking .txt{color:var(--ink-3)}
+.msg.sys{align-self:center;font:12px var(--mono);color:var(--ink-3);text-align:center;max-width:92%}
+.msg.err .txt{color:var(--alert)}
+.msg img{display:block;max-width:180px;border-radius:10px;margin-bottom:6px}
+.mactions{display:flex;gap:10px;margin-top:4px}
+.mactions button{all:unset;cursor:pointer;font:11px var(--mono);color:var(--ink-3)}
+.actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.action{display:inline-flex;align-items:center;gap:6px;text-decoration:none;color:var(--ground);background:var(--arc);font:600 13px var(--body);padding:7px 12px;border-radius:10px}
+.raw{font:12px var(--mono);color:var(--ink-3);user-select:all;align-self:center}
+.tools{font:11px var(--mono);color:var(--ink-3);margin-top:4px}
+.sugg{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;scrollbar-width:none}
+.sugg::-webkit-scrollbar{display:none}
+.sugg button{flex:none;appearance:none;border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:999px;padding:6px 12px;font:13px var(--body);cursor:pointer;white-space:nowrap}
+.composer{padding-block:8px calc(10px + env(safe-area-inset-bottom))}
+.row{display:flex;gap:8px;align-items:flex-end}
+.field{flex:1;display:flex;align-items:flex-end;background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:4px 4px 4px 12px}
+.field:focus-within{border-color:var(--arc-dim)}
+textarea{flex:1;resize:none;border:0;background:transparent;color:var(--ink);font:16px/1.4 var(--body);padding:7px 0;max-height:120px;outline:none}
+textarea::placeholder{color:var(--ink-3)}
+.round{appearance:none;border:0;width:44px;height:44px;border-radius:50%;display:grid;place-items:center;cursor:pointer;flex:none;transition:transform .1s}
+.round:active{transform:scale(.92)}
+.round svg{width:21px;height:21px}
+.send{background:var(--arc);color:var(--ground)}
+.send.stop{background:var(--alert)}
+.mic{background:var(--panel-2);color:var(--ink-2);border:1px solid var(--line)}
+.mic.on{background:var(--ok);color:var(--ground);border-color:var(--ok)}
+.mic.on.live{box-shadow:0 0 0 4px rgba(143,209,158,.25)}
+.attach{appearance:none;border:0;background:transparent;color:var(--ink-2);width:36px;height:36px;display:grid;place-items:center;cursor:pointer;flex:none}
+.attach svg{width:22px;height:22px}
+.hint{font-size:12px;color:var(--ink-3);margin-top:6px;display:flex;justify-content:space-between;gap:8px}
+.preview{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+.preview img{height:44px;border-radius:8px}
+.sheet{position:fixed;inset:0;background:rgba(5,9,14,.6);display:flex;align-items:flex-end;justify-content:center;z-index:5;-webkit-backdrop-filter:blur(4px);backdrop-filter:blur(4px)}
+.sheet .panel{background:var(--panel);border:1px solid var(--line);border-bottom:0;border-radius:18px 18px 0 0;width:100%;max-width:640px;padding:18px 16px calc(18px + env(safe-area-inset-bottom));max-height:88%;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.sheet h2{font-family:var(--display);font-size:14px;letter-spacing:.16em;text-transform:uppercase;color:var(--arc);margin:0 0 12px}
+.sheet h3{font-size:13px;color:var(--ink-2);font-weight:600;margin:18px 0 6px}
+.sheet label{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-block:8px;border-bottom:1px solid var(--line)}
+.sheet label.stack{flex-direction:column;align-items:stretch;gap:6px}
+.sheet select,.sheet input{background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:14px var(--body);max-width:62%}
+.sheet label.stack input{max-width:100%;font-family:var(--mono);font-size:13px}
+.sheet .note{font-size:12px;color:var(--ink-3)}
+.sheet .note a{color:var(--arc)}
+.memlist{list-style:none;margin:0;padding:0}
+.memlist li{display:flex;justify-content:space-between;gap:10px;padding-block:6px;border-bottom:1px solid var(--line);font-size:14px}
+.memlist li button{all:unset;cursor:pointer;color:var(--ink-3)}
+.memlist li span:last-child{color:var(--ink-2);text-align:right}
+.empty{color:var(--ink-3);font-size:13px}
+.wide{margin-top:12px;width:100%}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">Jarvis<small id="clock">—</small></div>
+    <div class="hbtns">
+      <button class="pill" id="provPill" type="button" aria-label="Changer de modèle">Claude</button>
+      <button class="iconbtn" id="voiceBtn" aria-pressed="true" aria-label="Réponses à voix haute">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path id="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>
+      </button>
+      <button class="iconbtn" id="setBtn" aria-label="Réglages">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section class="core" aria-live="polite">
+    <canvas id="orb" aria-label="Couper Jarvis"></canvas>
+    <div class="status">
+      <div class="state" id="state">En veille</div>
+      <div class="detail" id="detail">Touche le micro pour parler.</div>
+      <div class="timers" id="timers"></div>
+    </div>
+  </section>
+
+  <main class="log" id="log"></main>
+
+  <div class="composer">
+    <div class="sugg" id="sugg">
+      <button>Quelles sont les actus du jour ?</button>
+      <button>Quel temps fera-t-il à Dijon demain ?</button>
+      <button>Minuteur 12 minutes pour les pâtes</button>
+      <button>Retiens que mon partiel de pharmaco est le 14 octobre</button>
+      <button>Combien font 15 % de 240 ?</button>
+    </div>
+    <div class="preview" id="preview" hidden><img id="pimg" alt="Image jointe"><button class="iconbtn" id="pdel" type="button">Retirer</button></div>
+    <form class="row" id="form">
+      <button class="round mic" id="micBtn" type="button" aria-label="Mode conversation">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+      <div class="field">
+        <textarea id="input" rows="1" placeholder="Parle ou écris…" autocomplete="off" enterkeyhint="send"></textarea>
+        <label class="attach" title="Joindre une photo ou une capture">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="18" height="14" rx="3"/><circle cx="12" cy="13" r="3.5"/><path d="M8.5 6l1.5-2h4l1.5 2"/></svg>
+          <input type="file" id="file" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+        </label>
+      </div>
+      <button class="round send" id="send" type="submit" aria-label="Envoyer"></button>
+    </form>
+    <div class="hint"><span id="hintL">Micro : conversation continue · orbe : couper</span><span id="modeInfo">—</span></div>
+  </div>
+</div>
+
+<div class="sheet" id="sheet" hidden>
+  <div class="panel" role="dialog" aria-label="Réglages">
+    <h2>Réglages</h2>
+
+    <h3>Cerveau</h3>
+    <label>Modèle utilisé
+      <select id="provider">
+        <option value="claude">Claude (Anthropic)</option>
+        <option value="deepseek">DeepSeek</option>
+      </select>
+    </label>
+    <label class="stack">Clé API Claude
+      <input id="claudeKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-ant-…">
+      <span class="note">À créer sur <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>. Elle sert aussi à la recherche web.</span>
+    </label>
+    <label>Modèle Claude
+      <select id="claudeModel">
+        <option value="claude-haiku-4-5-20251001">Haiku 4.5 (le plus rapide)</option>
+        <option value="claude-sonnet-5">Sonnet 5 (équilibré)</option>
+        <option value="claude-opus-5-5">Opus 5.5 (le plus fort)</option>
+      </select>
+    </label>
+    <label class="stack">Clé API DeepSeek
+      <input id="dsKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…">
+      <span class="note">À créer sur <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noopener">platform.deepseek.com</a>.</span>
+    </label>
+    <label class="stack">Modèle DeepSeek
+      <input id="dsModel" type="text" autocomplete="off" autocapitalize="off" spellcheck="false">
+    </label>
+    <label class="stack">Adresse de l'API DeepSeek
+      <input id="dsBase" type="url" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <span class="note">À changer seulement si Safari ne joint pas DeepSeek : mets l'adresse de ton relais (fichier deepseek-relais.js).</span>
+    </label>
+    <label>Recherche web
+      <select id="webSel"><option value="1">Activée</option><option value="0">Désactivée</option></select>
+    </label>
+    <button class="iconbtn wide" id="testApi" type="button">Tester la connexion</button>
+
+    <h3>Voix et conversation</h3>
+    <label>Style
+      <select id="persona">
+        <option value="concis">Concis et précis</option>
+        <option value="neutre">Naturel</option>
+        <option value="majordome">Majordome</option>
+      </select>
+    </label>
+    <label>Voix <select id="voiceSel"></select></label>
+    <label>Vitesse
+      <select id="rate"><option value="0.95">Posée</option><option value="1.05">Normale</option><option value="1.2">Rapide</option></select>
+    </label>
+    <label>Délai avant envoi
+      <select id="silence"><option value="800">Court</option><option value="1100">Normal</option><option value="1600">Long</option></select>
+    </label>
+    <button class="iconbtn wide" id="testVoice" type="button">Tester la voix</button>
+
+    <h3>Diagnostic</h3>
+    <ul class="memlist" id="diag"></ul>
+    <h3>Mémoire long terme</h3>
+    <ul class="memlist" id="memlist"></ul>
+    <h3>Notes</h3>
+    <ul class="memlist" id="notelist"></ul>
+    <button class="iconbtn wide" id="clearChat" type="button">Effacer la conversation</button>
+    <button class="iconbtn wide" id="closeSheet" type="button">Fermer</button>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const store = {
+    get(k, d){ try{ const v = localStorage.getItem("jarvis:"+k); return v == null ? d : JSON.parse(v); }catch{ return d; } },
+    set(k, v){ try{ localStorage.setItem("jarvis:"+k, JSON.stringify(v)); }catch{} }
+  };
+
+  // ================= state =================
+  const cfg = Object.assign({
+    provider: "claude", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
+    dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
+    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true
+  }, store.get("cfg", {}));
+  const saveCfg = () => store.set("cfg", cfg);
+  let memories = store.get("mem", []);
+  let notes = store.get("notes", []);
+  let turns = store.get("turns", []);           // [{role, content(string)}]
+  let timers = [];
+  let busy = false, ctl = null, pendingImg = null, mode = "idle";
+  const diag = { modèle:"—", internet:"—", micro:"—", voix:"—", dernier:"aucun envoi" };
+
+  const fmtLeft = ms => { const s = Math.max(0, Math.round(ms/1000)); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
+  const nowLong = () => new Date().toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});
+  const tick = () => { $("clock").textContent = new Date().toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"}); };
+  tick(); setInterval(tick, 15000);
+
+  // ================= orb =================
+  const cv = $("orb"), cx = cv.getContext("2d");
+  const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const SZ = 76, dpr = Math.min(devicePixelRatio || 1, 3);
+  cv.width = SZ*dpr; cv.height = SZ*dpr; cx.scale(dpr, dpr);
+  let orbOn = true;
+  function drawOrb(t){
+    if(!orbOn) return;
+    const c = SZ/2; cx.clearRect(0,0,SZ,SZ);
+    const sp = mode==="thinking" ? 2.4 : mode==="speaking" ? 1.2 : mode==="listening" ? .8 : .35;
+    const pulse = mode==="speaking" ? (Math.sin(t/110)*.5+.5) : mode==="listening" ? (Math.sin(t/260)*.5+.5)*.6 : mode==="thinking" ? .4 : (Math.sin(t/900)*.5+.5)*.3;
+    const col = mode==="listening" ? "143,209,158" : "124,212,228";
+    const g = cx.createRadialGradient(c,c,3,c,c,c);
+    g.addColorStop(0, `rgba(${col},${.55+pulse*.35})`); g.addColorStop(.35, `rgba(${col},${.12+pulse*.1})`); g.addColorStop(1, `rgba(${col},0)`);
+    cx.fillStyle = g; cx.beginPath(); cx.arc(c,c,c,0,Math.PI*2); cx.fill();
+    cx.fillStyle = "#E6F8FB"; cx.beginPath(); cx.arc(c,c,4.5+pulse*2.5,0,Math.PI*2); cx.fill();
+    [[15,10,1],[23,18,-1],[31,28,1]].forEach(([r,n,dir],i) => {
+      const rot = reduce ? 0 : t/1000*sp*dir*(1+i*.3);
+      for(let k=0;k<n;k++){
+        const a0 = rot + k*(Math.PI*2/n), a1 = a0 + (Math.PI*2/n)*.62;
+        cx.strokeStyle = i===1 ? `rgba(216,166,94,${.55+pulse*.3})` : `rgba(${col},${.7-i*.15})`;
+        cx.lineWidth = i===0 ? 2 : 1.25; cx.beginPath(); cx.arc(c,c,r,a0,a1); cx.stroke();
+      }
+    });
+    if(!reduce) requestAnimationFrame(drawOrb);
+  }
+  requestAnimationFrame(drawOrb);
+  document.addEventListener("visibilitychange", () => {
+    if(document.hidden){ orbOn = false; } else if(!orbOn){ orbOn = true; requestAnimationFrame(drawOrb); }
+  });
+  const LABEL = { idle:"En veille", thinking:"Réflexion", speaking:"Parle", listening:"J'écoute" };
+  function setMode(m, detail){
+    mode = m;
+    $("state").textContent = LABEL[m]; $("state").classList.toggle("listen", m==="listening");
+    if(detail !== undefined) $("detail").textContent = detail;
+    if(reduce) requestAnimationFrame(drawOrb);
+  }
+
+  // ================= log =================
+  const log = $("log");
+  const scroll = () => { log.scrollTop = log.scrollHeight; };
+  function addMsg(kind, text, opts = {}){
+    const el = document.createElement("div");
+    el.className = "msg " + kind + (opts.cls ? " " + opts.cls : "");
+    if(kind === "bot"){ const w = document.createElement("span"); w.className = "who"; w.textContent = opts.who || "Jarvis"; el.append(w); }
+    if(opts.img){ const im = document.createElement("img"); im.src = opts.img; im.alt = "Image envoyée"; el.append(im); }
+    const t = document.createElement("span"); t.className = "txt"; t.textContent = text; el.append(t);
+    if(kind === "bot" && !opts.plain){
+      const a = document.createElement("div"); a.className = "mactions";
+      const cp = document.createElement("button"); cp.type = "button"; cp.textContent = "copier";
+      cp.onclick = () => { navigator.clipboard?.writeText(t.textContent).then(() => { cp.textContent = "✓"; setTimeout(() => cp.textContent = "copier", 1200); }, () => {}); };
+      const rp = document.createElement("button"); rp.type = "button"; rp.textContent = "relire";
+      rp.onclick = () => { stopListening(); speak(t.textContent, true); };
+      a.append(cp, rp); el.append(a);
+    }
+    log.append(el); scroll(); return el;
+  }
+  function addAction(msgEl, label, href, raw){
+    let box = msgEl.querySelector(".actions");
+    if(!box){ box = document.createElement("div"); box.className = "actions"; msgEl.append(box); }
+    const a = document.createElement("a"); a.className = "action"; a.href = href; a.target = "_blank"; a.rel = "noopener"; a.textContent = label + " ↗";
+    box.append(a);
+    if(raw){ const r = document.createElement("span"); r.className = "raw"; r.textContent = raw; box.append(r); }
+    scroll();
+  }
+  const whoLabel = () => cfg.provider === "deepseek" ? "Jarvis · DeepSeek" : "Jarvis · Claude";
+
+  // ================= speech out =================
+  const synth = window.speechSynthesis;
+  let voices = [];
+  function loadVoices(){
+    if(!synth) return;
+    voices = synth.getVoices().filter(v => /^fr/i.test(v.lang));
+    const rank = v => (/(premium|enhanced|amélioré|siri)/i.test(v.name) ? 0 : 1) + (/fr-FR/i.test(v.lang) ? 0 : .5);
+    voices.sort((a,b) => rank(a) - rank(b));
+    const sel = $("voiceSel"); sel.innerHTML = "";
+    if(!voices.length){ const o = document.createElement("option"); o.textContent = "Voix système"; sel.append(o); return; }
+    voices.forEach(v => { const o = document.createElement("option"); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.append(o); });
+    if(!voices.some(v => v.name === cfg.voice)) cfg.voice = voices[0].name;
+    sel.value = cfg.voice; diag.voix = voices.length + " voix françaises";
+  }
+  if(synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
+
+  let actx = null, unlocked = false;
+  function unlockAudio(){
+    if(unlocked) return; unlocked = true;
+    try{ if(synth){ const u = new SpeechSynthesisUtterance("ok"); u.volume = .01; u.rate = 2; u.lang = "fr-FR"; synth.speak(u); } }catch{}
+    try{ actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume?.(); }catch{}
+  }
+  ["touchend","click","keydown"].forEach(ev => document.addEventListener(ev, unlockAudio, {capture:true, passive:true}));
+
+  const queue = []; let speaking = false, started = false;
+  function chunkText(text){
+    const clean = text.replace(/[*_#`>|]/g,"").replace(/https?:\/\/\S+/g,"").replace(/\[[^\]]*\]\([^)]*\)/g,"").trim();
+    const parts = clean.split(/(?<=[.!?…:;])\s+|\n+/).filter(p => p.trim());
+    const out = []; let buf = "";
+    for(const p of parts){ if(buf && (buf + " " + p).length > 180){ out.push(buf); buf = p; } else buf = buf ? buf + " " + p : p; }
+    if(buf.trim()) out.push(buf.trim());
+    return out;
+  }
+  function speakAppend(text, force = false){
+    if((!cfg.speak && !force) || !synth || !text || !text.trim()) return;
+    const parts = chunkText(text); if(!parts.length) return;
+    queue.push(...parts);
+    if(!speaking){
+      speaking = true; started = false; stopListening();
+      speakNext();
+      setTimeout(() => { if(speaking && !started && !synth.speaking){ diag.voix = "bloquée (mode silencieux ?)"; speaking = false; queue.length = 0; afterSpeech(); } }, 3000);
+    }
+  }
+  function speak(text, force = false){ stopSpeaking(); setTimeout(() => speakAppend(text, force), 60); }
+  function speakNext(){
+    if(!queue.length){ speaking = false; afterSpeech(); return; }
+    const u = new SpeechSynthesisUtterance(queue.shift());
+    const v = voices.find(x => x.name === cfg.voice); if(v) u.voice = v;
+    u.lang = v?.lang || "fr-FR"; u.rate = Number(cfg.rate) || 1.05;
+    u.onstart = () => { started = true; diag.voix = "OK"; setMode("speaking"); };
+    u.onend = speakNext;
+    u.onerror = e => { if(e.error !== "interrupted" && e.error !== "canceled") diag.voix = "erreur : " + e.error; speakNext(); };
+    try{ synth.speak(u); }catch{ speakNext(); }
+  }
+  function stopSpeaking(){ queue.length = 0; speaking = false; try{ synth?.cancel(); }catch{} if(mode === "speaking") setMode("idle", ""); }
+  function afterSpeech(){
+    if(busy) return;
+    if(mode === "speaking") setMode("idle", "");
+    if(conv) setTimeout(startListening, 350);   // hand the floor back
+    else setMode("idle", "Touche le micro pour parler.");
+  }
+  function syncVoiceBtn(){ $("voiceBtn").setAttribute("aria-pressed", String(cfg.speak)); $("wave").style.opacity = cfg.speak ? 1 : .15; }
+  syncVoiceBtn();
+  $("voiceBtn").onclick = () => { cfg.speak = !cfg.speak; saveCfg(); if(!cfg.speak) stopSpeaking(); syncVoiceBtn(); };
+  $("orb").addEventListener("click", () => { if(speaking || mode === "speaking"){ stopSpeaking(); afterSpeech(); } else if(busy){ ctl?.abort(); } });
+
+  function beep(){
+    try{
+      if(!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      actx.resume?.();
+      [0,.35,.7].forEach(off => {
+        const o = actx.createOscillator(), g = actx.createGain(); o.frequency.value = 880;
+        g.gain.setValueAtTime(.0001, actx.currentTime+off);
+        g.gain.exponentialRampToValueAtTime(.3, actx.currentTime+off+.02);
+        g.gain.exponentialRampToValueAtTime(.0001, actx.currentTime+off+.28);
+        o.connect(g).connect(actx.destination); o.start(actx.currentTime+off); o.stop(actx.currentTime+off+.3);
+      });
+    }catch{}
+  }
+
+  // ================= speech in (Safari recognition) =================
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let rec = null, listening = false, conv = false, silenceT = null, heard = "";
+  const input = $("input");
+  function setMicUI(){
+    $("micBtn").classList.toggle("on", conv);
+    $("micBtn").classList.toggle("live", listening);
+    $("micBtn").setAttribute("aria-pressed", String(conv));
+  }
+  function startListening(){
+    if(!SR || !conv || listening || busy || speaking) return;
+    try{
+      rec = new SR();
+      rec.lang = "fr-FR"; rec.interimResults = true; rec.continuous = true; rec.maxAlternatives = 1;
+      heard = "";
+      rec.onstart = () => { listening = true; diag.micro = "OK"; setMicUI(); setMode("listening", "Parle, j'envoie dès que tu marques une pause."); };
+      rec.onresult = e => {
+        // rebuild the whole transcript each time (Safari may resend earlier results)
+        heard = Array.from(e.results).map(r => r[0].transcript).join(" ").replace(/\s+/g," ").trim();
+        input.value = heard; autosize();
+        clearTimeout(silenceT);
+        silenceT = setTimeout(commitSpeech, Number(cfg.silence) || 1100);
+      };
+      rec.onerror = e => {
+        diag.micro = "erreur : " + e.error;
+        if(e.error === "not-allowed" || e.error === "service-not-allowed"){
+          conv = false; setMicUI();
+          addMsg("sys", "Micro refusé. Autorise le micro pour Safari (Réglages > Safari > Micro) et active Siri/Dictée (Réglages > Général > Clavier > Dictée).");
+        }
+      };
+      rec.onend = () => {
+        listening = false; setMicUI();
+        if(heard.trim() && !busy){ commitSpeech(); return; }
+        if(mode === "listening") setMode("idle", conv ? "" : "Touche le micro pour parler.");
+        if(conv && !busy && !speaking) setTimeout(startListening, 300);   // Safari stops by itself after a while
+      };
+      rec.start();
+    }catch(err){ diag.micro = "indisponible : " + err.message; listening = false; setMicUI(); }
+  }
+  function stopListening(){ clearTimeout(silenceT); if(rec){ try{ rec.onend = () => { listening = false; setMicUI(); }; rec.abort(); }catch{} } rec = null; listening = false; setMicUI(); }
+  function commitSpeech(){
+    clearTimeout(silenceT);
+    const t = (input.value || heard).trim(); heard = "";
+    stopListening();
+    if(!t) return;
+    input.value = ""; autosize();
+    send(t);
+  }
+  $("micBtn").onclick = () => {
+    unlockAudio();
+    if(!SR){ addMsg("sys", "La reconnaissance vocale n'est pas disponible ici. Ouvre la page dans Safari, ou utilise la touche micro du clavier."); return; }
+    conv = !conv; setMicUI();
+    if(conv){ stopSpeaking(); startListening(); }
+    else { stopListening(); setMode("idle", "Touche le micro pour parler."); }
+  };
+  if(!SR){ diag.micro = "non disponible (utilise la dictée du clavier)"; $("hintL").textContent = "Dictée : touche micro du clavier"; }
+
+  // ================= timers =================
+  let wakeLock = null;
+  async function keepAwake(on){
+    try{
+      if(on && !wakeLock && navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen");
+      if(!on && wakeLock){ await wakeLock.release(); wakeLock = null; }
+    }catch{ wakeLock = null; }
+  }
+  function renderTimers(){
+    const box = $("timers"); box.innerHTML = "";
+    timers.forEach(t => {
+      const c = document.createElement("span"); c.className = "chip" + (t.done ? " done" : "");
+      const l = document.createElement("span"); l.textContent = `${t.label} · ${t.done ? "terminé" : fmtLeft(t.end - Date.now())}`;
+      const x = document.createElement("button"); x.textContent = "×"; x.setAttribute("aria-label", "Supprimer " + t.label);
+      x.onclick = () => removeTimer(t.id);
+      c.append(l, x); box.append(c);
+    });
+  }
+  setInterval(() => { if(timers.some(t => !t.done)) renderTimers(); }, 1000);
+  const persistTimers = () => store.set("timers", timers.map(({id,label,end,done}) => ({id,label,end,done})));
+  function schedule(t){ clearTimeout(t.h); t.h = setTimeout(() => fireTimer(t.id), Math.max(0, t.end - Date.now())); }
+  function fireTimer(id){
+    const t = timers.find(x => x.id === id); if(!t || t.done) return;
+    t.done = true; persistTimers(); renderTimers(); beep();
+    addMsg("sys", `⏰ ${t.label} terminé`);
+    stopListening(); speak(`${t.label} terminé.`, true);
+    if(!timers.some(x => !x.done)) keepAwake(false);
+  }
+  function addTimer(sec, label){
+    const t = { id: Math.random().toString(36).slice(2,7), label: label || "Minuteur", end: Date.now() + sec*1000, done: false };
+    timers.push(t); schedule(t); persistTimers(); renderTimers(); keepAwake(true); return t;
+  }
+  function removeTimer(id){
+    const t = timers.find(x => x.id === id); if(t) clearTimeout(t.h);
+    timers = timers.filter(x => x.id !== id); persistTimers(); renderTimers();
+    if(!timers.some(x => !x.done)) keepAwake(false);
+  }
+  document.addEventListener("visibilitychange", () => {
+    if(document.hidden) return;
+    timers.forEach(t => { if(!t.done){ if(t.end <= Date.now()) fireTimer(t.id); else schedule(t); } });
+    renderTimers();
+  });
+
+  // ================= calculator (no eval) =================
+  function calc(src){
+    const e = String(src).toLowerCase().slice(0,200)
+      .replace(/(\d+(?:[.,]\d+)?)\s*%\s*(?:de|of)\s*/g, "($1/100)*")
+      .replace(/(\d),(\d)/g, "$1.$2").replace(/×/g,"*").replace(/÷/g,"/").replace(/\s+/g,"");
+    let p = 0;
+    const eat = c => (e[p] === c ? (p++, true) : false);
+    const num = () => { const m = /^\d*\.?\d+(?:e[+-]?\d+)?/.exec(e.slice(p)); if(!m) throw new Error("Expression non comprise."); p += m[0].length; return parseFloat(m[0]); };
+    const atom = () => {
+      if(eat("-")) return -atom();
+      if(eat("+")) return atom();
+      if(e.startsWith("sqrt", p)){ p += 4; if(!eat("(")) throw new Error("sqrt( attendu."); const v = expr(); if(!eat(")")) throw new Error(") manquante."); return Math.sqrt(v); }
+      if(e.startsWith("pi", p)){ p += 2; return Math.PI; }
+      if(eat("(")){ const v = expr(); if(!eat(")")) throw new Error(") manquante."); return v; }
+      let v = num(); if(eat("%")) v /= 100; return v;
+    };
+    const power = () => { const b = atom(); return eat("^") ? Math.pow(b, power()) : b; };
+    const term = () => { let v = power(); for(;;){ if(eat("*")) v *= power(); else if(eat("/")) v /= power(); else return v; } };
+    function expr(){ let v = term(); for(;;){ if(eat("+")) v += term(); else if(eat("-")) v -= term(); else return v; } }
+    const v = expr(); if(p !== e.length || !isFinite(v)) throw new Error("Calcul impossible.");
+    return Math.round(v*1e10)/1e10;
+  }
+
+  // ================= tools (shared by both models) =================
+  let currentMsg = null, toolLog = [];
+  function linkFor(kind, value){
+    const q = encodeURIComponent(value);
+    return {
+      itineraire: "https://maps.apple.com/?daddr=" + q, carte: "https://maps.apple.com/?q=" + q,
+      recherche: "https://www.google.com/search?q=" + q, web: /^https?:\/\//.test(value) ? value : "https://" + value,
+      appel: "tel:" + value.replace(/[^\d+]/g,""), sms: "sms:" + value.replace(/[^\d+]/g,""),
+      musique: "https://music.apple.com/search?term=" + q, raccourci: "shortcuts://run-shortcut?name=" + q
+    }[kind] || null;
+  }
+  const obj = (props, req) => ({ type:"object", properties: props, required: req || [] });
+  const TOOLS = [
+    { name:"set_timer", description:"Lance un minuteur. Retourne l'heure de fin.",
+      parameters: obj({ seconds:{type:"number"}, label:{type:"string"} }, ["seconds"]),
+      run: i => { const s = Math.round(Number(i.seconds)); if(!(s > 0 && s <= 86400)) throw new Error("Durée invalide."); const t = addTimer(s, String(i.label || "Minuteur").slice(0,40)); toolLog.push("minuteur"); return { fin: new Date(t.end).toLocaleTimeString("fr-FR",{hour:"2-digit",minute:"2-digit"}) }; } },
+    { name:"cancel_timer", description:"Annule les minuteurs dont le nom contient ce texte, ou tous avec « tous ».",
+      parameters: obj({ label:{type:"string"} }, ["label"]),
+      run: i => { const l = String(i.label || "").toLowerCase(); const hit = timers.filter(t => l === "tous" || t.label.toLowerCase().includes(l)); hit.forEach(t => removeTimer(t.id)); toolLog.push("minuteur annulé"); return { annules: hit.length }; } },
+    { name:"remember", description:"Mémorise un fait durable sur l'utilisateur.",
+      parameters: obj({ fact:{type:"string"} }, ["fact"]),
+      run: i => { const f = String(i.fact || "").trim().slice(0,200); if(!f) throw new Error("Fait vide."); memories.push(f); if(memories.length > 80) memories.shift(); store.set("mem", memories); toolLog.push("mémorisé"); return { ok:true }; } },
+    { name:"forget", description:"Supprime de la mémoire les faits contenant ce texte.",
+      parameters: obj({ contains:{type:"string"} }, ["contains"]),
+      run: i => { const c = String(i.contains || "").toLowerCase(); const b = memories.length; memories = memories.filter(m => !m.toLowerCase().includes(c)); store.set("mem", memories); toolLog.push("oublié"); return { supprimes: b - memories.length }; } },
+    { name:"add_note", description:"Ajoute une note ou un élément de liste (courses, à faire).",
+      parameters: obj({ text:{type:"string"} }, ["text"]),
+      run: i => { const n = String(i.text || "").trim().slice(0,300); if(!n) throw new Error("Note vide."); notes.push(n); store.set("notes", notes); toolLog.push("note"); return { total: notes.length }; } },
+    { name:"clear_notes", description:"Supprime toutes les notes.", parameters: obj({}),
+      run: () => { const n = notes.length; notes = []; store.set("notes", notes); toolLog.push("notes effacées"); return { supprimees: n }; } },
+    { name:"show_link", description:"Affiche un bouton à toucher : itineraire, carte, recherche, web, appel, sms, musique, raccourci (Raccourci iOS, ex. lampes).",
+      parameters: obj({ kind:{type:"string", enum:["itineraire","carte","recherche","web","appel","sms","musique","raccourci"]}, value:{type:"string"}, label:{type:"string"} }, ["kind","value","label"]),
+      run: i => { const kind = String(i.kind), value = String(i.value || "").slice(0,300); const href = linkFor(kind, value); if(!href || !value) throw new Error("Lien impossible."); if(currentMsg) addAction(currentMsg, String(i.label || "Ouvrir").slice(0,40), href, ["appel","sms"].includes(kind) ? value : null); toolLog.push("lien"); return { ok:true }; } },
+    { name:"calculate", description:"Calcule une expression : + - * / ^ %, parenthèses, sqrt(). Ex. « 15% de 240 ».",
+      parameters: obj({ expression:{type:"string"} }, ["expression"]),
+      run: i => { toolLog.push("calcul"); return { resultat: calc(i.expression) }; } },
+    { name:"set_style", description:"Change le style de réponse : concis, neutre ou majordome.",
+      parameters: obj({ style:{type:"string", enum:["concis","neutre","majordome"]} }, ["style"]),
+      run: i => { if(!STYLES[i.style]) throw new Error("Style inconnu."); cfg.persona = i.style; saveCfg(); toolLog.push("style"); return { ok:true }; } }
+  ];
+  // DeepSeek has no web access of its own: this tool asks Claude's web search (needs the Claude key)
+  const WEB_TOOL = { name:"web_search", description:"Recherche sur internet (actualité, météo, scores, prix, horaires, tout fait récent). Retourne un résumé factuel daté.",
+    parameters: obj({ query:{type:"string", description:"Ce qu'il faut chercher, en une phrase précise"} }, ["query"]),
+    run: async (i, signal) => { toolLog.push("recherche web"); setMode("thinking", "Recherche sur internet…"); return await claudeWebLookup(String(i.query || ""), signal); } };
+
+  async function runTool(tools, name, args, signal){
+    const t = tools.find(x => x.name === name);
+    if(!t) return { text: "Erreur : outil inconnu.", error: true };
+    try{ const r = await t.run(args || {}, signal); return { text: typeof r === "string" ? r : JSON.stringify(r), error: false }; }
+    catch(e){ return { text: "Erreur : " + e.message, error: true }; }
+  }
+
+  const STYLES = {
+    concis: "Style : direct, factuel, précis. La réponse commence dès le premier mot. Aucune formule de politesse, aucun « Monsieur », aucune introduction, aucune conclusion, aucune question de relance, aucun commentaire sur toi-même. Chiffres, noms, dates et heures exacts. Tu tutoies.",
+    neutre: "Style : naturel et chaleureux, bref. Tu tutoies.",
+    majordome: "Style : majordome britannique pince-sans-rire, tu vouvoies et dis « Monsieur », mais tu restes bref."
+  };
+  function systemPrompt(webOn){
+    return [
+      "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. " + STYLES[cfg.persona],
+      "Tes réponses sont LUES À VOIX HAUTE : français parlé, une ou deux phrases courtes par défaut, sans markdown, sans listes, sans emoji, sans URL. Pour une action (minuteur, note, mémoire), confirme en quelques mots.",
+      `Maintenant : ${nowLong()} (Europe/Paris).`,
+      webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
+      "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
+      "Minuteurs en cours : " + (timers.filter(t => !t.done).map(t => `${t.label} (reste ${fmtLeft(t.end - Date.now())})`).join(", ") || "aucun") + ".",
+      "Mémoire : " + (memories.length ? memories.map(m => "- " + m).join("\n") : "vide"),
+      "Notes : " + (notes.length ? notes.map(n => "- " + n).join("\n") : "aucune")
+    ].join("\n");
+  }
+
+  // ================= network helpers =================
+  async function* sse(resp){
+    const reader = resp.body.getReader(), dec = new TextDecoder(); let buf = "";
+    for(;;){
+      const { value, done } = await reader.read(); if(done) break;
+      buf += dec.decode(value, { stream:true }).replace(/\r/g, "");
+      let i;
+      while((i = buf.indexOf("\n\n")) >= 0){
+        const raw = buf.slice(0, i); buf = buf.slice(i + 2);
+        const data = raw.split("\n").filter(l => l.startsWith("data:")).map(l => l.slice(5).trimStart()).join("\n");
+        if(data) yield data;
+      }
+    }
+  }
+  async function apiError(resp, who){
+    let msg = ""; try{ const j = await resp.json(); msg = j.error?.message || j.message || ""; }catch{}
+    const map = { 401:"clé API refusée — vérifie-la dans les réglages", 402:"solde insuffisant sur ton compte", 403:"accès refusé pour cette clé", 404:"modèle introuvable — vérifie son nom", 429:"trop de requêtes, attends un peu", 500:"erreur du service", 529:"service surchargé, réessaie" };
+    const e = new Error(`${who} : ${map[resp.status] || "erreur " + resp.status}${msg ? " (" + msg.slice(0,160) + ")" : ""}`);
+    e.status = resp.status; return e;
+  }
+  const netError = (who, err) => err.name === "AbortError" ? err : new Error(`${who} injoignable depuis ce navigateur (réseau coupé ou appel bloqué par le serveur).` + (who === "DeepSeek" ? " Mets en place le relais décrit dans deepseek-relais.js et colle son adresse dans les réglages." : ""));
+  const claudeHeaders = () => ({ "content-type":"application/json", "x-api-key": cfg.claudeKey.trim(), "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" });
+  const WEB_SERVER_TOOL = { type:"web_search_20250305", name:"web_search", max_uses:3, user_location:{ type:"approximate", city:"Dijon", region:"Bourgogne-Franche-Comté", country:"FR", timezone:"Europe/Paris" } };
+
+  // ---- Claude (streaming, local tools + Anthropic web search) ----
+  async function runClaude(messages, onText, signal){
+    const webOn = cfg.web;
+    const tools = TOOLS.map(t => ({ name:t.name, description:t.description, input_schema:t.parameters }));
+    if(webOn) tools.push(WEB_SERVER_TOOL);
+    let full = "";
+    for(let round = 0; round < 6; round++){
+      let resp;
+      try{
+        resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", signal, headers: claudeHeaders(),
+          body: JSON.stringify({ model: cfg.claudeModel, max_tokens: 1024, system: systemPrompt(webOn), messages, tools, stream: true }) });
+      }catch(err){ throw netError("Claude", err); }
+      if(!resp.ok) throw await apiError(resp, "Claude");
+      const blocks = []; let stop = null;
+      for await (const d of sse(resp)){
+        let ev; try{ ev = JSON.parse(d); }catch{ continue; }
+        if(ev.type === "content_block_start"){
+          const b = { ...ev.content_block };
+          if(b.type === "tool_use" || b.type === "server_tool_use") b._json = "";
+          if(b.type === "server_tool_use"){ toolLog.push("recherche web"); setMode("thinking", "Recherche sur internet…"); }
+          blocks[ev.index] = b;
+        }else if(ev.type === "content_block_delta"){
+          const b = blocks[ev.index]; if(!b) continue;
+          if(ev.delta.type === "text_delta"){ b.text = (b.text || "") + ev.delta.text; full += ev.delta.text; onText(full); }
+          else if(ev.delta.type === "input_json_delta"){ b._json += ev.delta.partial_json; }
+        }else if(ev.type === "content_block_stop"){
+          const b = blocks[ev.index];
+          if(b && "_json" in b){ try{ b.input = b._json ? JSON.parse(b._json) : {}; }catch{ b.input = {}; } delete b._json; }
+        }else if(ev.type === "message_delta"){ stop = ev.delta?.stop_reason || stop; }
+        else if(ev.type === "error"){ throw new Error("Claude : " + (ev.error?.message || "erreur pendant la réponse")); }
+      }
+      const content = blocks.filter(Boolean)
+        .map(b => b.type === "text" ? { type:"text", text: b.text || "" } : b)
+        .filter(b => !(b.type === "text" && !b.text));
+      if(stop === "tool_use"){
+        messages.push({ role:"assistant", content });
+        const results = [];
+        for(const b of content.filter(b => b.type === "tool_use")){
+          const r = await runTool(TOOLS, b.name, b.input, signal);
+          results.push({ type:"tool_result", tool_use_id: b.id, content: r.text, is_error: r.error });
+        }
+        messages.push({ role:"user", content: results });
+        if(full && !/\s$/.test(full)) full += " ";
+        continue;
+      }
+      if(stop === "pause_turn"){ messages.push({ role:"assistant", content }); continue; }
+      return full;
+    }
+    return full;
+  }
+
+  // ---- Claude web lookup used as DeepSeek's search tool ----
+  async function claudeWebLookup(query, signal){
+    if(!cfg.claudeKey.trim()) throw new Error("Recherche web impossible : ajoute une clé Claude dans les réglages.");
+    let resp;
+    try{
+      resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", signal, headers: claudeHeaders(),
+        body: JSON.stringify({ model:"claude-haiku-4-5-20251001", max_tokens: 700, tools:[WEB_SERVER_TOOL],
+          messages:[{ role:"user", content:`Nous sommes le ${nowLong()}. Cherche sur le web et donne les faits précis, chiffrés et datés qui répondent à : « ${query} ». Réponds en français, en 5 lignes maximum, sans introduction.` }] }) });
+    }catch(err){ throw netError("Claude", err); }
+    if(!resp.ok) throw await apiError(resp, "Recherche Claude");
+    const j = await resp.json();
+    const text = (j.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+    diag.internet = text ? "OK (via Claude)" : "aucun résultat";
+    return text || "Aucun résultat trouvé.";
+  }
+
+  // ---- DeepSeek (OpenAI-compatible, streaming, function calling) ----
+  let dsThinkingParam = true;
+  async function runDeepSeek(history, onText, signal){
+    const webOn = cfg.web && !!cfg.claudeKey.trim();
+    const tools = [...TOOLS, ...(webOn ? [WEB_TOOL] : [])];
+    const messages = [{ role:"system", content: systemPrompt(webOn) }, ...history];
+    const base = (cfg.dsBase || "https://api.deepseek.com").replace(/\/+$/,"");
+    let full = "";
+    for(let round = 0; round < 6; round++){
+      const body = { model: cfg.dsModel.trim() || "deepseek-v4-flash", messages, stream: true, max_tokens: 1024,
+        tools: tools.map(t => ({ type:"function", function:{ name:t.name, description:t.description, parameters:t.parameters } })) };
+      if(dsThinkingParam) body.thinking = { type:"disabled" };   // faster voice replies
+      let resp;
+      try{
+        resp = await fetch(base + "/chat/completions", { method:"POST", signal,
+          headers:{ "content-type":"application/json", "authorization":"Bearer " + cfg.dsKey.trim() }, body: JSON.stringify(body) });
+      }catch(err){ throw netError("DeepSeek", err); }
+      if(!resp.ok){
+        if(resp.status === 400 && dsThinkingParam){ dsThinkingParam = false; round--; continue; }  // older API: drop the option
+        throw await apiError(resp, "DeepSeek");
+      }
+      let content = "", reasoning = "", finish = null; const calls = [];
+      for await (const d of sse(resp)){
+        if(d === "[DONE]") break;
+        let j; try{ j = JSON.parse(d); }catch{ continue; }
+        const ch = j.choices?.[0]; if(!ch) continue;
+        const dl = ch.delta || {};
+        if(dl.reasoning_content) reasoning += dl.reasoning_content;
+        if(dl.content){ content += dl.content; full += dl.content; onText(full); }
+        for(const tc of dl.tool_calls || []){
+          const c = calls[tc.index ?? 0] ||= { id:"", type:"function", function:{ name:"", arguments:"" } };
+          if(tc.id) c.id = tc.id;
+          if(tc.function?.name) c.function.name += tc.function.name;
+          if(tc.function?.arguments) c.function.arguments += tc.function.arguments;
+        }
+        if(ch.finish_reason) finish = ch.finish_reason;
+      }
+      const list = calls.filter(Boolean);
+      if(list.length){
+        const am = { role:"assistant", content: content || null, tool_calls: list };
+        if(reasoning) am.reasoning_content = reasoning;
+        messages.push(am);
+        for(const c of list){
+          let args = {}; try{ args = JSON.parse(c.function.arguments || "{}"); }catch{}
+          const r = await runTool(tools, c.function.name, args, signal);
+          messages.push({ role:"tool", tool_call_id: c.id, content: r.text });
+        }
+        if(full && !/\s$/.test(full)) full += " ";
+        continue;
+      }
+      return full;
+    }
+    return full;
+  }
+
+  // ================= send =================
+  function autosize(){ input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; }
+  input.addEventListener("input", () => { autosize(); if(listening){ clearTimeout(silenceT); } });
+  input.addEventListener("keydown", e => { if(e.key === "Enter" && !e.shiftKey){ e.preventDefault(); $("form").requestSubmit(); } });
+  const ICON_SEND = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>';
+  const ICON_STOP = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>';
+  function setBusy(b){ busy = b; const s = $("send"); s.classList.toggle("stop", b); s.innerHTML = b ? ICON_STOP : ICON_SEND; s.setAttribute("aria-label", b ? "Arrêter" : "Envoyer"); }
+  setBusy(false);
+  const saveTurns = () => store.set("turns", turns.slice(-30));
+
+  function keyMissing(){
+    if(cfg.provider === "deepseek" && !cfg.dsKey.trim()) return "Ajoute ta clé DeepSeek dans les réglages (bouton en haut à droite).";
+    if(cfg.provider === "claude" && !cfg.claudeKey.trim()) return "Ajoute ta clé Claude dans les réglages (bouton en haut à droite).";
+    return null;
+  }
+
+  async function fileToB64(file){
+    // shrink photos to keep requests small and fast
+    const bmp = await createImageBitmap(file);
+    const k = Math.min(1, 1568 / Math.max(bmp.width, bmp.height));
+    const c = document.createElement("canvas"); c.width = Math.round(bmp.width*k); c.height = Math.round(bmp.height*k);
+    c.getContext("2d").drawImage(bmp, 0, 0, c.width, c.height);
+    const url = c.toDataURL("image/jpeg", .85);
+    return { media_type:"image/jpeg", data: url.split(",")[1] };
+  }
+
+  async function send(text){
+    const missing = keyMissing();
+    if(missing){ addMsg("sys", missing); $("setBtn").click(); return; }
+    stopSpeaking(); stopListening();
+    const img = pendingImg; clearImg();
+    addMsg("user", text, { img: img ? URL.createObjectURL(img) : null });
+    turns.push({ role:"user", content: text + (img ? " [photo jointe]" : "") });
+    turns = turns.slice(-30); while(turns.length && turns[0].role !== "user") turns.shift();
+    saveTurns();
+
+    // photos go to Claude (DeepSeek's text models can't see them)
+    let provider = cfg.provider;
+    if(img && provider === "deepseek"){
+      if(cfg.claudeKey.trim()){ provider = "claude"; addMsg("sys", "Photo : analysée par Claude."); }
+      else { addMsg("sys", "DeepSeek ne lit pas les photos ici. Ajoute une clé Claude pour ça."); }
+    }
+
+    currentMsg = addMsg("bot", "…", { cls:"thinking", who: provider === "deepseek" ? "Jarvis · DeepSeek" : "Jarvis · Claude" });
+    const txt = currentMsg.querySelector(".txt");
+    toolLog = []; setBusy(true); setMode("thinking", "Réflexion…");
+    ctl = new AbortController();
+    let spokenUpTo = 0;
+    const onText = full => {
+      currentMsg.classList.remove("thinking"); txt.textContent = full; scroll();
+      const rest = full.slice(spokenUpTo);
+      const m = rest.match(/^[\s\S]*[.!?…](?=\s)/);        // speak each finished sentence right away
+      if(m && m[0].trim().length > 1){ speakAppend(m[0]); spokenUpTo += m[0].length; }
+    };
+    const history = turns.map(t => ({ role:t.role, content:t.content }));
+    const t0 = performance.now();
+    try{
+      let out;
+      if(provider === "claude"){
+        if(img){
+          const b = await fileToB64(img);
+          history[history.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text } ] };
+        }
+        out = await runClaude(history, onText, ctl.signal);
+      }else{
+        out = await runDeepSeek(history, onText, ctl.signal);
+      }
+      out = (out || "").trim() || "Pas de réponse.";
+      txt.textContent = out;
+      turns.push({ role:"assistant", content: out }); saveTurns();
+      diag.modèle = (provider === "claude" ? cfg.claudeModel : cfg.dsModel) + " · OK";
+      diag.dernier = `${new Date().toLocaleTimeString("fr-FR")} · ${((performance.now()-t0)/1000).toFixed(1)} s`;
+      if(toolLog.length){ const d = document.createElement("div"); d.className = "tools"; d.textContent = "↳ " + [...new Set(toolLog)].join(" · "); currentMsg.append(d); }
+      setBusy(false);
+      speakAppend(out.slice(Math.min(spokenUpTo, out.length)));
+      if(!speaking) afterSpeech();
+    }catch(e){
+      setBusy(false);
+      currentMsg.classList.remove("thinking");
+      turns.pop(); saveTurns();
+      if(e.name === "AbortError"){ txt.textContent = txt.textContent === "…" ? "Interrompu." : txt.textContent; }
+      else { txt.textContent = e.message; currentMsg.classList.add("err"); diag.dernier = "erreur · " + e.message.slice(0,120); }
+      afterSpeech();
+    }finally{ ctl = null; scroll(); }
+  }
+
+  $("form").addEventListener("submit", e => {
+    e.preventDefault();
+    if(busy){ ctl?.abort(); return; }
+    const v = input.value.trim();
+    if(!v && !pendingImg) return;
+    input.value = ""; autosize();
+    send(v || "Qu'est-ce que tu vois sur cette photo ?");
+  });
+  $("sugg").addEventListener("click", e => { if(e.target.tagName === "BUTTON" && !busy) send(e.target.textContent); });
+
+  function clearImg(){ pendingImg = null; $("preview").hidden = true; $("file").value = ""; }
+  $("file").onchange = e => { const f = e.target.files?.[0]; if(!f) return; pendingImg = f; $("pimg").src = URL.createObjectURL(f); $("preview").hidden = false; };
+  $("pdel").onclick = clearImg;
+
+  // ================= settings =================
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence"];
+  function syncPill(){ $("provPill").textContent = cfg.provider === "deepseek" ? "DeepSeek" : "Claude"; $("modeInfo").textContent = (cfg.provider === "deepseek" ? cfg.dsModel : cfg.claudeModel.replace(/-\d{8}$/,"")); }
+  syncPill();
+  function renderLists(){
+    const fill = (ul, arr, key) => {
+      ul.innerHTML = "";
+      if(!arr.length){ const li = document.createElement("li"); li.className = "empty"; li.textContent = "Rien pour l'instant."; ul.append(li); return; }
+      arr.forEach((m, i) => { const li = document.createElement("li"); const s = document.createElement("span"); s.textContent = m; const b = document.createElement("button"); b.textContent = "Suppr."; b.onclick = () => { arr.splice(i,1); store.set(key, arr); renderLists(); }; li.append(s, b); ul.append(li); });
+    };
+    fill($("memlist"), memories, "mem"); fill($("notelist"), notes, "notes");
+  }
+  function renderDiag(){
+    const ul = $("diag"); ul.innerHTML = "";
+    Object.entries(diag).forEach(([k, v]) => { const li = document.createElement("li"); const a = document.createElement("span"); a.textContent = k; const b = document.createElement("span"); b.textContent = v; li.append(a, b); ul.append(li); });
+  }
+  $("setBtn").onclick = () => {
+    fields.forEach(f => { $(f).value = cfg[f]; });
+    $("webSel").value = cfg.web ? "1" : "0";
+    if(voices.length) $("voiceSel").value = cfg.voice;
+    renderLists(); renderDiag(); $("sheet").hidden = false;
+  };
+  fields.forEach(f => $(f).addEventListener("change", e => { cfg[f] = e.target.value; saveCfg(); syncPill(); if(f === "provider") dsThinkingParam = true; }));
+  $("webSel").onchange = e => { cfg.web = e.target.value === "1"; saveCfg(); };
+  $("voiceSel").onchange = e => { cfg.voice = e.target.value; saveCfg(); speak("Voix sélectionnée.", true); };
+  $("provPill").onclick = () => { cfg.provider = cfg.provider === "claude" ? "deepseek" : "claude"; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + (cfg.provider === "deepseek" ? "DeepSeek" : "Claude")); };
+  $("testVoice").onclick = () => {
+    try{ synth.cancel(); const u = new SpeechSynthesisUtterance("Test de la voix de Jarvis."); const v = voices.find(x => x.name === cfg.voice); if(v) u.voice = v; u.lang = v?.lang || "fr-FR"; u.rate = Number(cfg.rate); u.onstart = () => { diag.voix = "OK"; renderDiag(); }; synth.speak(u); }
+    catch{ diag.voix = "indisponible"; renderDiag(); }
+  };
+  $("testApi").onclick = async () => {
+    const b = $("testApi"); b.disabled = true; b.textContent = "Test en cours…";
+    const res = [];
+    const probe = async (label, fn) => { try{ const t0 = performance.now(); const out = await fn(); res.push(`${label} : OK (${((performance.now()-t0)/1000).toFixed(1)} s)` + (out ? " — « " + out.slice(0,40) + " »" : "")); }catch(e){ res.push(`${label} : ${e.message}`); } };
+    if(cfg.claudeKey.trim()) await probe("Claude", async () => {
+      const r = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", headers: claudeHeaders(), body: JSON.stringify({ model: cfg.claudeModel, max_tokens: 20, messages:[{ role:"user", content:"Réponds juste : OK" }] }) }).catch(err => { throw netError("Claude", err); });
+      if(!r.ok) throw await apiError(r, "Claude"); const j = await r.json(); return (j.content || []).map(x => x.text || "").join("");
+    });
+    if(cfg.dsKey.trim()) await probe("DeepSeek", async () => {
+      const base = (cfg.dsBase || "https://api.deepseek.com").replace(/\/+$/,"");
+      const r = await fetch(base + "/chat/completions", { method:"POST", headers:{ "content-type":"application/json", "authorization":"Bearer " + cfg.dsKey.trim() }, body: JSON.stringify({ model: cfg.dsModel.trim(), max_tokens: 20, messages:[{ role:"user", content:"Réponds juste : OK" }] }) }).catch(err => { throw netError("DeepSeek", err); });
+      if(!r.ok) throw await apiError(r, "DeepSeek"); const j = await r.json(); return j.choices?.[0]?.message?.content || "";
+    });
+    if(!res.length) res.push("Aucune clé renseignée.");
+    addMsg("sys", res.join("\n"));
+    b.disabled = false; b.textContent = "Tester la connexion"; $("sheet").hidden = true;
+  };
+  $("clearChat").onclick = () => { turns = []; saveTurns(); log.innerHTML = ""; addMsg("sys", "Conversation effacée. Mémoire et notes conservées."); $("sheet").hidden = true; };
+  $("closeSheet").onclick = () => { $("sheet").hidden = true; };
+  $("sheet").onclick = e => { if(e.target.id === "sheet") $("sheet").hidden = true; };
+
+  // ================= boot =================
+  turns.forEach(t => addMsg(t.role === "user" ? "user" : "bot", t.content, t.role === "user" ? {} : { who:"Jarvis" }));
+  if(!turns.length){
+    addMsg("bot", keyMissing() ? "Bonjour. Colle ta clé Claude ou DeepSeek dans les réglages, puis touche le micro pour parler." : "Prêt. Touche le micro pour parler.", { plain:true });
+  }
+  (store.get("timers", []) || []).forEach(t => { timers.push({ ...t }); });
+  timers.forEach(t => { if(!t.done){ if(t.end > Date.now()){ schedule(t); keepAwake(true); } else fireTimer(t.id); } });
+  renderTimers();
+  if(location.protocol === "file:") addMsg("sys", "Ouvre cette page depuis une adresse https (GitHub Pages) : Safari bloque le micro et les appels réseau sur un fichier local.");
+})();
+</script>
+</body>
+</html>
