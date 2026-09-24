@@ -334,7 +334,15 @@ textarea::placeholder{color:var(--ink-3)}
       cp.onclick = () => { navigator.clipboard?.writeText(t.textContent).then(() => { cp.textContent = "✓"; setTimeout(() => cp.textContent = "copier", 1200); }, () => {}); };
       const rp = document.createElement("button"); rp.type = "button"; rp.textContent = "relire";
       rp.onclick = () => { stopListening(); speak(t.textContent, true); };
-      a.append(cp, rp); el.append(a);
+      // hand the exchange over to claude.ai (opens the Claude app when installed)
+      const cl = document.createElement("button"); cl.type = "button"; cl.textContent = "continuer dans Claude ↗";
+      cl.onclick = () => {
+        let q = el.previousElementSibling; while(q && !q.classList.contains("user")) q = q.previousElementSibling;
+        const ask = q?.querySelector(".txt")?.textContent.trim() || "";
+        const text = (ask ? "Ma question : " + ask + "\n\n" : "") + "Réponse de mon assistant Jarvis : " + t.textContent.trim() + "\n\nApprofondis.";
+        window.open(claudeLink(text), "_blank", "noopener");
+      };
+      a.append(cp, rp, cl); el.append(a);
     }
     log.append(el); scroll(); return el;
   }
@@ -662,13 +670,15 @@ textarea::placeholder{color:var(--ink-3)}
 
   // ================= tools (shared by both models) =================
   let currentMsg = null, toolLog = [];
+  const claudeLink = text => "https://claude.ai/new?q=" + encodeURIComponent(String(text).slice(0, 1800));
   function linkFor(kind, value){
     const q = encodeURIComponent(value);
     return {
       itineraire: "https://maps.apple.com/?daddr=" + q, carte: "https://maps.apple.com/?q=" + q,
       recherche: "https://www.google.com/search?q=" + q, web: /^https?:\/\//.test(value) ? value : "https://" + value,
       appel: "tel:" + value.replace(/[^\d+]/g,""), sms: "sms:" + value.replace(/[^\d+]/g,""),
-      musique: "https://music.apple.com/search?term=" + q, raccourci: "shortcuts://run-shortcut?name=" + q
+      musique: "https://music.apple.com/search?term=" + q, raccourci: "shortcuts://run-shortcut?name=" + q,
+      claude: claudeLink(value)
     }[kind] || null;
   }
   const obj = (props, req) => ({ type:"object", properties: props, required: req || [] });
@@ -690,8 +700,8 @@ textarea::placeholder{color:var(--ink-3)}
       run: i => { const n = String(i.text || "").trim().slice(0,300); if(!n) throw new Error("Note vide."); notes.push(n); store.set("notes", notes); toolLog.push("note"); return { total: notes.length }; } },
     { name:"clear_notes", description:"Supprime toutes les notes.", parameters: obj({}),
       run: () => { const n = notes.length; notes = []; store.set("notes", notes); toolLog.push("notes effacées"); return { supprimees: n }; } },
-    { name:"show_link", description:"Affiche un bouton à toucher : itineraire, carte, recherche, web, appel, sms, musique, raccourci (Raccourci iOS, ex. lampes).",
-      parameters: obj({ kind:{type:"string", enum:["itineraire","carte","recherche","web","appel","sms","musique","raccourci"]}, value:{type:"string"}, label:{type:"string"} }, ["kind","value","label"]),
+    { name:"show_link", description:"Affiche un bouton à toucher : itineraire, carte, recherche, web, appel, sms, musique, raccourci (Raccourci iOS, ex. lampes), claude (ouvre une nouvelle conversation claude.ai de l'utilisateur ; value = la demande complète, avec le contexte utile).",
+      parameters: obj({ kind:{type:"string", enum:["itineraire","carte","recherche","web","appel","sms","musique","raccourci","claude"]}, value:{type:"string"}, label:{type:"string"} }, ["kind","value","label"]),
       run: i => { const kind = String(i.kind), value = String(i.value || "").slice(0,300); const href = linkFor(kind, value); if(!href || !value) throw new Error("Lien impossible."); if(currentMsg) addAction(currentMsg, String(i.label || "Ouvrir").slice(0,40), href, ["appel","sms"].includes(kind) ? value : null); toolLog.push("lien"); return { ok:true }; } },
     { name:"add_event", description:"Crée un rendez-vous ou un rappel daté dans le Calendrier de l'iPhone, avec une alerte qui sonne même si Jarvis est fermé. Affiche un bouton que l'utilisateur touche pour l'ajouter.",
       parameters: obj({
@@ -755,6 +765,7 @@ textarea::placeholder{color:var(--ink-3)}
       "Tes réponses sont LUES À VOIX HAUTE : écris comme on parle, avec des tournures orales naturelles, des phrases qui s'enchaînent et des virgules là où l'on respire. Une ou deux phrases par défaut, sans markdown, sans listes, sans emoji, sans URL, sans abréviations ni symboles (écris « degrés », « pour cent », « kilomètres »). Pour une action (minuteur, note, mémoire), confirme en quelques mots.",
       `Maintenant : ${nowLong()} (Europe/Paris).`,
       webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
+      "Si l'utilisateur veut continuer, approfondir ou envoyer quelque chose dans Claude ou claude.ai, utilise show_link avec kind « claude ».",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
       "Jarvis s'arrête quand la page est fermée : mémoire et notes restent enregistrées, mais un minuteur ne sonne que si Jarvis reste ouvert. Pour un rendez-vous, un rappel à une date ou une heure, ou un minuteur long, utilise add_event (alerte du Calendrier de l'iPhone, fiable même Jarvis fermé) puis dis en une phrase de toucher « Ajouter au Calendrier ».",
       "Minuteurs en cours : " + (timers.filter(t => !t.done).map(t => `${t.label} (reste ${fmtLeft(t.end - Date.now())})`).join(", ") || "aucun") + ".",
