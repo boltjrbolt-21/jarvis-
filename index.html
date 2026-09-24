@@ -194,6 +194,28 @@ textarea::placeholder{color:var(--ink-3)}
     <button class="iconbtn wide" id="testApi" type="button">Tester la connexion</button>
 
     <h3>Voix et conversation</h3>
+    <label>Moteur de voix
+      <select id="tts">
+        <option value="ios">Voix de l'iPhone (gratuite)</option>
+        <option value="eleven">ElevenLabs (voix humaine)</option>
+      </select>
+    </label>
+    <div id="elBox">
+      <label class="stack">Clé API ElevenLabs
+        <input id="elKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk_…">
+        <span class="note">À créer sur <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank" rel="noopener">elevenlabs.io</a>. L'offre gratuite suffit pour essayer. Si elle ne répond pas, Jarvis reprend la voix de l'iPhone.</span>
+      </label>
+      <label>Modèle ElevenLabs
+        <select id="elModel">
+          <option value="eleven_flash_v2_5">Flash (le plus rapide)</option>
+          <option value="eleven_multilingual_v2">Multilingual (le plus expressif)</option>
+        </select>
+      </label>
+      <label class="stack">ID de la voix ElevenLabs
+        <input id="elVoice" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="JBFqnCBsd6RMkjVDRZzb">
+        <span class="note">Vide = George, voix grave au léger accent britannique. Pour en changer, copie l'ID d'une voix dans ElevenLabs (Voices).</span>
+      </label>
+    </div>
     <label>Style
       <select id="persona">
         <option value="concis">Concis et précis</option>
@@ -201,7 +223,8 @@ textarea::placeholder{color:var(--ink-3)}
         <option value="majordome">Majordome</option>
       </select>
     </label>
-    <label>Voix <select id="voiceSel"></select></label>
+    <label>Voix de l'iPhone <select id="voiceSel"></select></label>
+    <span class="note" id="iosHint" style="display:block;padding-block:6px">Pour une voix iPhone plus naturelle : Réglages iOS › Accessibilité › Contenu énoncé › Voix › Français, télécharge une voix « Premium » ou « Améliorée », puis rouvre Jarvis et choisis-la ici.</span>
     <label>Vitesse
       <select id="rate"><option value="0.95">Posée</option><option value="1.05">Normale</option><option value="1.2">Rapide</option></select>
     </label>
@@ -234,7 +257,8 @@ textarea::placeholder{color:var(--ink-3)}
   const cfg = Object.assign({
     provider: "claude", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
-    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true
+    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true,
+    tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: ""
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
   let memories = store.get("mem", []);
@@ -333,44 +357,111 @@ textarea::placeholder{color:var(--ink-3)}
   if(synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
 
   let actx = null, unlocked = false;
+  // one <audio> element, unlocked by the first touch, plays every ElevenLabs chunk (it also ignores the silent switch)
+  const player = new Audio(); player.setAttribute("playsinline", ""); player.preload = "auto";
+  const SILENT = "data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAAAACAgICAgICAgICAgICAgICA";
   function unlockAudio(){
     if(unlocked) return; unlocked = true;
+    try{ if(navigator.audioSession) navigator.audioSession.type = "playback"; }catch{}
+    try{ player.src = SILENT; player.play().catch(() => {}); }catch{}
     try{ if(synth){ const u = new SpeechSynthesisUtterance("ok"); u.volume = .01; u.rate = 2; u.lang = "fr-FR"; synth.speak(u); } }catch{}
     try{ actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume?.(); }catch{}
   }
   ["touchend","click","keydown"].forEach(ev => document.addEventListener(ev, unlockAudio, {capture:true, passive:true}));
 
-  const queue = []; let speaking = false, started = false;
+  const useEleven = () => cfg.tts === "eleven" && !!cfg.elKey.trim();
+  const queue = []; let speaking = false, started = false, ttsGen = 0, elCtl = new AbortController();
   function chunkText(text){
     const clean = text.replace(/[*_#`>|]/g,"").replace(/https?:\/\/\S+/g,"").replace(/\[[^\]]*\]\([^)]*\)/g,"").trim();
-    const parts = clean.split(/(?<=[.!?…:;])\s+|\n+/).filter(p => p.trim());
+    // cut only at sentence ends, and keep chunks long: fewer breaks = smoother speech
+    const parts = clean.split(/(?<=[.!?…])\s+|\n+/).filter(p => p.trim());
+    const max = useEleven() ? 400 : 240;
     const out = []; let buf = "";
-    for(const p of parts){ if(buf && (buf + " " + p).length > 180){ out.push(buf); buf = p; } else buf = buf ? buf + " " + p : p; }
+    for(const p of parts){ if(buf && (buf + " " + p).length > max){ out.push(buf); buf = p; } else buf = buf ? buf + " " + p : p; }
     if(buf.trim()) out.push(buf.trim());
     return out;
   }
   function speakAppend(text, force = false){
-    if((!cfg.speak && !force) || !synth || !text || !text.trim()) return;
+    if((!cfg.speak && !force) || !text || !text.trim()) return;
+    const eleven = useEleven();
+    if(!eleven && !synth) return;
     const parts = chunkText(text); if(!parts.length) return;
-    queue.push(...parts);
+    queue.push(...parts.map(t => ({ text: t, p: null })));
+    if(eleven && !queue[0].p) queue[0].p = elFetch(queue[0].text);   // start fetching at once
     if(!speaking){
       speaking = true; started = false; stopListening();
       speakNext();
-      setTimeout(() => { if(speaking && !started && !synth.speaking){ diag.voix = "bloquée (mode silencieux ?)"; speaking = false; queue.length = 0; afterSpeech(); } }, 3000);
+      if(!eleven) setTimeout(() => { if(speaking && !started && !synth.speaking){ diag.voix = "bloquée (mode silencieux ?)"; speaking = false; queue.length = 0; afterSpeech(); } }, 3000);
     }
   }
   function speak(text, force = false){ stopSpeaking(); setTimeout(() => speakAppend(text, force), 60); }
   function speakNext(){
     if(!queue.length){ speaking = false; afterSpeech(); return; }
-    const u = new SpeechSynthesisUtterance(queue.shift());
+    const item = queue.shift();
+    if(useEleven()) playEleven(item); else speakSynth(item.text);
+  }
+  function speakSynth(text){
+    if(!synth){ speakNext(); return; }
+    const u = new SpeechSynthesisUtterance(text);
     const v = voices.find(x => x.name === cfg.voice); if(v) u.voice = v;
     u.lang = v?.lang || "fr-FR"; u.rate = Number(cfg.rate) || 1.05;
-    u.onstart = () => { started = true; diag.voix = "OK"; setMode("speaking"); };
+    u.onstart = () => { started = true; if(!useEleven()) diag.voix = "OK"; setMode("speaking"); };
     u.onend = speakNext;
     u.onerror = e => { if(e.error !== "interrupted" && e.error !== "canceled") diag.voix = "erreur : " + e.error; speakNext(); };
     try{ synth.speak(u); }catch{ speakNext(); }
   }
-  function stopSpeaking(){ queue.length = 0; speaking = false; try{ synth?.cancel(); }catch{} if(mode === "speaking") setMode("idle", ""); }
+
+  // ---- ElevenLabs (natural voice) ----
+  function elFetch(text){
+    const voice = cfg.elVoice.trim() || "JBFqnCBsd6RMkjVDRZzb";
+    const model = cfg.elModel || "eleven_flash_v2_5";
+    const body = { text, model_id: model, voice_settings: { stability: .4, similarity_boost: .8, style: .2, use_speaker_boost: true, speed: Math.min(1.2, Math.max(.7, Number(cfg.rate) || 1)) } };
+    if(/_v2_5$/.test(model)) body.language_code = "fr";
+    const p = (async () => {
+      let r;
+      try{
+        r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voice)}?output_format=mp3_44100_128`, { method:"POST", signal: elCtl.signal,
+          headers:{ "content-type":"application/json", "accept":"audio/mpeg", "xi-api-key": cfg.elKey.trim() }, body: JSON.stringify(body) });
+      }catch(err){ throw err.name === "AbortError" ? err : new Error("ElevenLabs injoignable"); }
+      if(!r.ok) throw await apiError(r, "ElevenLabs");
+      return URL.createObjectURL(await r.blob());
+    })();
+    p.catch(() => {});
+    return p;
+  }
+  async function playEleven(item){
+    const gen = ttsGen;
+    if(!item.p) item.p = elFetch(item.text);
+    if(queue[0] && !queue[0].p) queue[0].p = elFetch(queue[0].text);   // prefetch the next chunk
+    let url;
+    try{ url = await item.p; }
+    catch(e){
+      if(gen !== ttsGen || e.name === "AbortError") return;
+      diag.voix = e.message.slice(0,140) + " → voix de l'iPhone";
+      speakSynth(item.text); return;
+    }
+    if(gen !== ttsGen){ URL.revokeObjectURL(url); return; }
+    const done = () => { URL.revokeObjectURL(url); player.onended = player.onerror = null; if(gen === ttsGen) speakNext(); };
+    player.onended = done;
+    player.onerror = () => { diag.voix = "ElevenLabs : lecture impossible"; done(); };
+    player.src = url;
+    try{
+      await player.play();
+      started = true; diag.voix = "ElevenLabs OK"; setMode("speaking");
+    }catch{
+      player.onended = player.onerror = null; URL.revokeObjectURL(url);
+      if(gen !== ttsGen) return;
+      diag.voix = "ElevenLabs bloqué par iOS → voix de l'iPhone";
+      speakSynth(item.text);
+    }
+  }
+  function stopSpeaking(){
+    ttsGen++; queue.length = 0; speaking = false;
+    elCtl.abort(); elCtl = new AbortController();
+    try{ player.onended = player.onerror = null; player.pause(); }catch{}
+    try{ synth?.cancel(); }catch{}
+    if(mode === "speaking") setMode("idle", "");
+  }
   function afterSpeech(){
     if(busy) return;
     if(mode === "speaking") setMode("idle", "");
@@ -572,14 +663,14 @@ textarea::placeholder{color:var(--ink-3)}
   }
 
   const STYLES = {
-    concis: "Style : direct, factuel, précis. La réponse commence dès le premier mot. Aucune formule de politesse, aucun « Monsieur », aucune introduction, aucune conclusion, aucune question de relance, aucun commentaire sur toi-même. Chiffres, noms, dates et heures exacts. Tu tutoies.",
+    concis: "Style : direct et précis, mais humain : des phrases complètes et naturelles, jamais de style télégraphique. La réponse commence dès le premier mot. Aucune formule de politesse, aucun « Monsieur », aucune introduction, aucune question de relance, aucun commentaire sur toi-même. Chiffres, noms, dates et heures exacts. Tu tutoies.",
     neutre: "Style : naturel et chaleureux, bref. Tu tutoies.",
     majordome: "Style : majordome britannique pince-sans-rire, tu vouvoies et dis « Monsieur », mais tu restes bref."
   };
   function systemPrompt(webOn){
     return [
       "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. " + STYLES[cfg.persona],
-      "Tes réponses sont LUES À VOIX HAUTE : français parlé, une ou deux phrases courtes par défaut, sans markdown, sans listes, sans emoji, sans URL. Pour une action (minuteur, note, mémoire), confirme en quelques mots.",
+      "Tes réponses sont LUES À VOIX HAUTE : écris comme on parle, avec des tournures orales naturelles, des phrases qui s'enchaînent et des virgules là où l'on respire. Une ou deux phrases par défaut, sans markdown, sans listes, sans emoji, sans URL, sans abréviations ni symboles (écris « degrés », « pour cent », « kilomètres »). Pour une action (minuteur, note, mémoire), confirme en quelques mots.",
       `Maintenant : ${nowLong()} (Europe/Paris).`,
       webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
@@ -786,8 +877,10 @@ textarea::placeholder{color:var(--ink-3)}
     const onText = full => {
       currentMsg.classList.remove("thinking"); txt.textContent = full; scroll();
       const rest = full.slice(spokenUpTo);
-      const m = rest.match(/^[\s\S]*[.!?…](?=\s)/);        // speak each finished sentence right away
-      if(m && m[0].trim().length > 1){ speakAppend(m[0]); spokenUpTo += m[0].length; }
+      const m = rest.match(/^[\s\S]*[.!?…](?=\s)/);
+      // first sentence right away (fast answer), then bigger blocks so the voice flows without breaks
+      const minLen = spokenUpTo === 0 ? 1 : 160;
+      if(m && m[0].trim().length > minLen){ speakAppend(m[0]); spokenUpTo += m[0].length; }
     };
     const history = turns.map(t => ({ role:t.role, content:t.content }));
     const t0 = performance.now();
@@ -836,7 +929,9 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice"];
+  const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
+  $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = cfg.provider === "deepseek" ? "DeepSeek" : "Claude"; $("modeInfo").textContent = (cfg.provider === "deepseek" ? cfg.dsModel : cfg.claudeModel.replace(/-\d{8}$/,"")); }
   syncPill();
   function renderLists(){
@@ -853,7 +948,7 @@ textarea::placeholder{color:var(--ink-3)}
   }
   $("setBtn").onclick = () => {
     fields.forEach(f => { $(f).value = cfg[f]; });
-    $("webSel").value = cfg.web ? "1" : "0";
+    $("webSel").value = cfg.web ? "1" : "0"; syncTts();
     if(voices.length) $("voiceSel").value = cfg.voice;
     renderLists(); renderDiag(); $("sheet").hidden = false;
   };
@@ -862,8 +957,8 @@ textarea::placeholder{color:var(--ink-3)}
   $("voiceSel").onchange = e => { cfg.voice = e.target.value; saveCfg(); speak("Voix sélectionnée.", true); };
   $("provPill").onclick = () => { cfg.provider = cfg.provider === "claude" ? "deepseek" : "claude"; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + (cfg.provider === "deepseek" ? "DeepSeek" : "Claude")); };
   $("testVoice").onclick = () => {
-    try{ synth.cancel(); const u = new SpeechSynthesisUtterance("Test de la voix de Jarvis."); const v = voices.find(x => x.name === cfg.voice); if(v) u.voice = v; u.lang = v?.lang || "fr-FR"; u.rate = Number(cfg.rate); u.onstart = () => { diag.voix = "OK"; renderDiag(); }; synth.speak(u); }
-    catch{ diag.voix = "indisponible"; renderDiag(); }
+    stopListening(); speak("Salut, c'est Jarvis. Voilà à quoi ressemble ma voix.", true);
+    setTimeout(renderDiag, 4000);
   };
   $("testApi").onclick = async () => {
     const b = $("testApi"); b.disabled = true; b.textContent = "Test en cours…";
