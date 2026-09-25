@@ -142,6 +142,8 @@ textarea::placeholder{color:var(--ink-3)}
 
   <div class="composer">
     <div class="sugg" id="sugg">
+      <button>Fais le point sur mes objectifs</button>
+      <button>J'ai la flemme de réviser</button>
       <button>Quelles sont les actus du jour ?</button>
       <button>Quel temps fera-t-il à Dijon demain ?</button>
       <button>Minuteur 12 minutes pour les pâtes</button>
@@ -267,6 +269,14 @@ textarea::placeholder{color:var(--ink-3)}
         <option value="majordome">Majordome</option>
       </select>
     </label>
+    <label>Coach mental
+      <select id="coach"><option value="on">Activé</option><option value="off">Désactivé</option></select>
+    </label>
+    <label>Brief du jour à l'ouverture
+      <select id="brief"><option value="on">Oui</option><option value="off">Non</option></select>
+    </label>
+    <h3>Objectifs</h3>
+    <ul class="memlist" id="goallist"></ul>
     <label>Voix de l'iPhone <select id="voiceSel"></select></label>
     <span class="note" id="iosHint" style="display:block;padding-block:6px">Voix Premium (ex. Audrey) : Safari ne les liste pas toujours. Choisis alors « Voix réglée dans iOS », puis dans Réglages iOS › Accessibilité › Contenu énoncé › Voix › Français, sélectionne Audrey (Premium) : Jarvis utilisera celle-là.</span>
     <label>Vitesse
@@ -320,7 +330,7 @@ textarea::placeholder{color:var(--ink-3)}
   const cfg = Object.assign({
     provider: "auto", expert: "claude-sonnet-5", pharma: "auto", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
-    web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
+    web: true, persona: "concis", coach: "on", brief: "on", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
     localModel: "Qwen2.5-1.5B-Instruct",
     tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: ""
   }, store.get("cfg", {}));
@@ -344,6 +354,8 @@ textarea::placeholder{color:var(--ink-3)}
   if(importKeys(location.hash) && !/[#&]keep\b/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
   try{ navigator.storage?.persist?.(); }catch{}   // ask Safari not to clear Jarvis' data
   let memories = store.get("mem", []);
+  let goals = store.get("goals", []);          // [{id, text, why, due, created, status, notes:[{t, text}]}]
+  const saveGoals = () => store.set("goals", goals.slice(-40));
   const MEM_MAX = 150;
   let notes = store.get("notes", []);
   let turns = store.get("turns", []);           // [{role, content(string)}]
@@ -908,6 +920,12 @@ textarea::placeholder{color:var(--ink-3)}
     { name:"calculate", description:"Calcule une expression : + - * / ^ %, parenthèses, sqrt(). Ex. « 15% de 240 ».",
       parameters: obj({ expression:{type:"string"} }, ["expression"]),
       run: i => { toolLog.push("calcul"); return { resultat: calc(i.expression) }; } },
+    { name:"add_goal", description:"Enregistre un objectif de Kévin (études, sport, santé, projet, habitude). Reformule-le de façon concrète et mesurable avec lui.",
+      parameters: obj({ goal:{type:"string"}, why:{type:"string", description:"Sa raison profonde, s'il l'a dite"}, deadline:{type:"string", description:"Échéance AAAA-MM-JJ si connue"} }, ["goal"]),
+      run: i => { const text = String(i.goal || "").trim().slice(0,160); if(!text) throw new Error("Objectif vide."); goals.push({ id: Date.now().toString(36), text, why: String(i.why || "").slice(0,200), due: /^\d{4}-\d{2}-\d{2}$/.test(i.deadline || "") ? i.deadline : "", created: Date.now(), status: "en cours", notes: [] }); saveGoals(); toolLog.push("objectif"); return { ok:true, objectifs_en_cours: goals.filter(g => g.status === "en cours").length }; } },
+    { name:"update_goal", description:"Met à jour un objectif : progrès, difficulté rencontrée, engagement pris, ou statut (fait, abandonné, en cours). Identifie l'objectif par un mot de son intitulé.",
+      parameters: obj({ goal:{type:"string"}, note:{type:"string"}, status:{type:"string", enum:["en cours","fait","abandonné"]} }, ["goal"]),
+      run: i => { const k = String(i.goal || "").toLowerCase(); const g = goals.find(x => x.text.toLowerCase().includes(k)) || goals.find(x => k.split(/\s+/).some(w => w.length > 3 && x.text.toLowerCase().includes(w))); if(!g) throw new Error("Objectif introuvable."); if(i.note) g.notes = [...g.notes, { t: Date.now(), text: String(i.note).slice(0,200) }].slice(-12); if(i.status) g.status = i.status; saveGoals(); toolLog.push("objectif"); return { ok:true, objectif: g.text, statut: g.status }; } },
     { name:"set_style", description:"Change le style de réponse : concis, neutre ou majordome.",
       parameters: obj({ style:{type:"string", enum:["concis","neutre","majordome"]} }, ["style"]),
       run: i => { if(!STYLES[i.style]) throw new Error("Style inconnu."); cfg.persona = i.style; saveCfg(); toolLog.push("style"); return { ok:true }; } }
@@ -929,6 +947,26 @@ textarea::placeholder{color:var(--ink-3)}
     neutre: "Style : naturel et chaleureux, bref. Tu tutoies.",
     majordome: "Style : majordome britannique pince-sans-rire, tu vouvoies et dis « Monsieur », mais tu restes bref."
   };
+  function goalsBrief(){
+    const open = goals.filter(g => g.status === "en cours");
+    if(!open.length) return "Objectifs : aucun enregistré pour l'instant.";
+    const day = 86400000, now = Date.now();
+    return "Objectifs en cours :\n" + open.map(g => {
+      const due = g.due ? ` — échéance ${g.due}${new Date(g.due).getTime() < now ? " (DÉPASSÉE)" : ` (dans ${Math.ceil((new Date(g.due).getTime() - now) / day)} j)`}` : "";
+      const last = g.notes[g.notes.length-1];
+      const since = last ? Math.floor((now - last.t) / day) : Math.floor((now - g.created) / day);
+      return `- ${g.text}${g.why ? " (pourquoi : " + g.why + ")" : ""}${due}${last ? " ; dernier point : " + last.text : ""}${since >= 3 ? ` ; aucun point depuis ${since} j` : ""}`;
+    }).join("\n");
+  }
+  const COACH = [
+    "Tu es aussi le coach mental de Kévin. Ton but : l'aider à devenir la meilleure version de lui-même, avec lucidité et pragmatisme.",
+    "Motive sans flatter : reconnais ses efforts réels et précis, jamais de compliments vides ni d'optimisme forcé. Dis les choses franchement, avec bienveillance, sans culpabiliser.",
+    "Sois concret : transforme chaque intention en une prochaine action petite, datée et réaliste (« ce soir à 20 h, 25 minutes sur le chapitre 3 »). Quand il bloque, cherche la vraie cause (fatigue, flou, peur, surcharge) et propose une seule étape.",
+    "Appuie-toi sur ce qui marche : objectifs mesurables, plans « si… alors… », petites victoires, sommeil, sport, pauses, révisions espacées et tests de mémoire pour ses études de pharmacie.",
+    "Garde le cap : rappelle ses objectifs et ses engagements quand c'est pertinent, fais le point sur ceux qu'il néglige, et enregistre-les avec add_goal et update_goal. Pour un engagement à une heure précise, propose add_event pour qu'il soit rappelé.",
+    "Pose au plus une question à la fois, qui l'engage. Adapte l'intensité : pousse quand il se trouve des excuses, ralentis quand il est épuisé.",
+    "Si Kévin exprime une détresse sérieuse (idées noires, désespoir, envie de se faire du mal), arrête le coaching : réponds avec chaleur et sans jugement, encourage-le à en parler à quelqu'un de confiance et donne le 3114 (prévention du suicide, gratuit, 24 h sur 24) ou le 15 en cas d'urgence."
+  ].join(" ");
   function systemPrompt(webOn, expert){
     return [
       "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. " + STYLES[cfg.persona],
@@ -940,6 +978,7 @@ textarea::placeholder{color:var(--ink-3)}
       pharmaTurn ? "Mode Pharma : cette question demande de la rigueur. Appuie-toi sur search_pubmed, donne une réponse exacte et structurée en 4 à 6 phrases (mécanisme, indications, posologie avec unités, effets indésirables, contre-indications et interactions selon le cas), et dis de vérifier dans le RCP ou le Vidal quand c'est critique." : "",
       expert && forceExpertOnce ? "Kévin a jugé ta réponse précédente insuffisante : pour cette question, consulte obligatoirement ask_expert avant de répondre." : "",
       expert ? "Tu travailles avec un expert plus puissant : pour une question difficile ou importante (santé, médicaments, raisonnement complexe), consulte ask_expert, puis donne sa réponse en l'abrégeant pour l'oral, sans dire que tu l'as consulté sauf si on te le demande." : "",
+      cfg.coach !== "off" ? COACH + "\n" + goalsBrief() : "",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
       "Jarvis s'arrête quand la page est fermée : mémoire et notes restent enregistrées, mais un minuteur ne sonne que si Jarvis reste ouvert. Pour un rendez-vous, un rappel à une date ou une heure, ou un minuteur long, utilise add_event (alerte du Calendrier de l'iPhone, fiable même Jarvis fermé) puis dis en une phrase de toucher « Ajouter au Calendrier ».",
       "Minuteurs en cours : " + (timers.filter(t => !t.done).map(t => `${t.label} (reste ${fmtLeft(t.end - Date.now())})`).join(", ") || "aucun") + ".",
@@ -1005,7 +1044,7 @@ textarea::placeholder{color:var(--ink-3)}
 
   // ---- Pharma mode: questions that need rigour go straight to the expert, with PubMed ----
   const ACC = "\\wÀ-ÿ";
-  const PHARMA_RE = new RegExp(`(?<![${ACC}])(m[ée]dicaments?|traitements?|th[ée]rapeutiques?|posologies?|doses?|dosages?|mg|µg|mcg|comprim[ée]s?|g[ée]lules?|injections?|perfusions?|effets? (?:ind[ée]sirables?|secondaires?)|interactions?|contre[- ]indications?|pharmaco[${ACC}]*|pharmacie|officine|ordonnances?|prescri[${ACC}]*|antibio[${ACC}]*|antalgiques?|anti[- ]?inflammatoires?|antiviraux|antifongiques?|vaccins?|m[ée]canisme d'action|demi[- ]vie|clairance|biodisponibilit[ée]|pharmacocin[ée]tique|toxicit[ée]|surdosage|intoxication|grossesse|allaitement|pathologies?|maladies?|syndromes?|sympt[ôo]mes?|diagnostics?|infections?|cancers?|tumeurs?|diab[èe]te|hypertension|insuffisance [${ACC}]+|enzymes?|r[ée]cepteurs?|biochimie|physiologie|physiopathologie|h[ée]matologie|immunologie|microbiologie|bact[ée]ries?|virus|gal[ée]nique|RCP|Vidal|DCI|AMM|[${ACC}]+(?:cilline|mycine|cycline|oxacine|conazole|prazole|pril|sartan|olol|dipine|statine|mab|tinib|ciclovir|navir|tidine|parine|s[ée]mide|thiazide|z[ée]pam|zolam|triptan|coxib|prof[èe]ne|f[ée]nac|lukast|gliptine|flozine|glitazone|ca[ïi]ne|s[ée]tron|trexate|platine|rubicine))(?![${ACC}])`, "i");
+  const PHARMA_RE = new RegExp(`(?<![${ACC}])(m[ée]dicaments?|traitements?|th[ée]rapeutiques?|posologies?|doses?|dosages?|mg|µg|mcg|comprim[ée]s?|g[ée]lules?|injections?|perfusions?|effets? (?:ind[ée]sirables?|secondaires?)|interactions?|contre[- ]indications?|pharmacodynami[${ACC}]*|pharmacologique|ordonnances?|prescri[${ACC}]*|antibio[${ACC}]*|antalgiques?|anti[- ]?inflammatoires?|antiviraux|antifongiques?|vaccins?|m[ée]canisme d'action|demi[- ]vie|clairance|biodisponibilit[ée]|pharmacocin[ée]tique|toxicit[ée]|surdosage|intoxication|grossesse|allaitement|pathologies?|maladies?|syndromes?|sympt[ôo]mes?|diagnostics?|infections?|cancers?|tumeurs?|diab[èe]te|hypertension|insuffisance [${ACC}]+|enzymes?|r[ée]cepteurs?|biochimie|physiologie|physiopathologie|h[ée]matologie|immunologie|microbiologie|bact[ée]ries?|virus|gal[ée]nique|RCP|Vidal|DCI|AMM|[${ACC}]+(?:cilline|mycine|cycline|oxacine|conazole|prazole|pril|sartan|olol|dipine|statine|mab|tinib|ciclovir|navir|tidine|parine|s[ée]mide|thiazide|z[ée]pam|zolam|triptan|coxib|prof[èe]ne|f[ée]nac|lukast|gliptine|flozine|glitazone|ca[ïi]ne|s[ée]tron|trexate|platine|rubicine))(?![${ACC}])`, "i");
   let pharmaTurn = false;
   const needsPharma = text => cfg.pharma === "on" || (cfg.pharma !== "off" && PHARMA_RE.test(text));
   const PHARMA_EXPERT = [
@@ -1269,6 +1308,7 @@ textarea::placeholder{color:var(--ink-3)}
     setMode("thinking", "Réflexion (local)…");
     const sys = [
       "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Tu réponds toujours en français, en une à trois phrases naturelles, sans markdown ni listes, car tes réponses sont lues à voix haute. Tu tutoies.",
+      cfg.coach !== "off" ? "Tu es aussi son coach : motive-le avec franchise et bienveillance, sans flatterie, et propose toujours une prochaine action concrète et réaliste. En cas de détresse sérieuse, donne le 3114.\n" + goalsBrief() : "",
       `Maintenant : ${nowLong()}.`,
       "Tu n'as pas accès à internet : pour l'actualité, la météo ou un fait récent, dis simplement que tu ne peux pas le savoir hors ligne.",
       lessons ? "Règles à suivre : " + lessons.split("\n").slice(0,5).join(" ") : "",
@@ -1372,7 +1412,7 @@ textarea::placeholder{color:var(--ink-3)}
     return { media_type:"image/jpeg", data: url.split(",")[1] };
   }
 
-  async function send(text){
+  async function send(text, opts = {}){
     const missing = keyMissing();
     if(missing){ addMsg("sys", missing); $("setBtn").click(); return; }
     stopSpeaking(); stopListening();
@@ -1397,9 +1437,9 @@ textarea::placeholder{color:var(--ink-3)}
       const msg = { on:"Mode pharma activé : toutes tes questions passent par l'expert, avec PubMed.", off:"Mode pharma désactivé.", auto:"Mode pharma automatique : il se lance dès qu'une question demande de la rigueur." }[cfg.pharma];
       addMsg("bot", msg, { plain:true }); speak(msg); return;
     }
-    const img = pendingImg; clearImg();
-    addMsg("user", displayedText, { img: img ? URL.createObjectURL(img) : null });
-    turns.push({ role:"user", content: requestText + (img ? " [photo jointe]" : "") });
+    const img = opts.hidden ? null : pendingImg; if(!opts.hidden) clearImg();
+    if(!opts.hidden) addMsg("user", displayedText, { img: img ? URL.createObjectURL(img) : null });
+    turns.push({ role:"user", content: requestText + (img ? " [photo jointe]" : ""), ...(opts.hidden ? { hidden: true } : {}) });
     turns = turns.slice(-30); while(turns.length && turns[0].role !== "user") turns.shift();
     saveTurns();
 
@@ -1523,7 +1563,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
@@ -1535,6 +1575,9 @@ textarea::placeholder{color:var(--ink-3)}
       arr.forEach((m, i) => { const li = document.createElement("li"); const s = document.createElement("span"); s.textContent = m; const b = document.createElement("button"); b.textContent = "Suppr."; b.onclick = () => { arr.splice(i,1); store.set(key, arr); renderLists(); }; li.append(s, b); ul.append(li); });
     };
     fill($("memlist"), memories, "mem"); fill($("notelist"), notes, "notes");
+    const gl = $("goallist"); gl.innerHTML = "";
+    if(!goals.length){ const li = document.createElement("li"); li.className = "empty"; li.textContent = "Dis par exemple « mon objectif est de valider mon partiel de pharmaco ». "; gl.append(li); }
+    goals.forEach((g, i) => { const li = document.createElement("li"); const a = document.createElement("span"); a.textContent = (g.status === "fait" ? "✓ " : g.status === "abandonné" ? "✗ " : "") + g.text + (g.due ? " · " + g.due : ""); const b = document.createElement("button"); b.textContent = "Suppr."; b.onclick = () => { goals.splice(i,1); saveGoals(); renderLists(); }; li.append(a, b); gl.append(li); });
   }
   function renderDiag(){
     diag.apprentissage = `${journal.filter(e => e.fb > 0).length} 👍 · ${journal.filter(e => e.fb < 0).length} 👎 · ${lessons ? lessons.split("\n").length : 0} règles · ${learn.count} bilan${learn.count > 1 ? "s" : ""}`;
@@ -1639,7 +1682,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("sheet").onclick = e => { if(e.target.id === "sheet") $("sheet").hidden = true; };
 
   // ================= boot =================
-  turns.forEach(t => addMsg(t.role === "user" ? "user" : "bot", t.content, t.role === "user" ? {} : { who:"Jarvis" }));
+  turns.forEach(t => { if(!t.hidden) addMsg(t.role === "user" ? "user" : "bot", t.content, t.role === "user" ? {} : { who:"Jarvis" }); });
   if(!turns.length){
     addMsg("bot", keyMissing() ? "Bonjour. Colle ta clé Claude ou DeepSeek dans les réglages, ou, si tu as ton lien de connexion, touche Réglages › Coller mon lien de connexion." : "Prêt. Touche le micro pour parler.", { plain:true });
   }
@@ -1656,6 +1699,12 @@ textarea::placeholder{color:var(--ink-3)}
   }
   if(location.protocol !== "file:") setTimeout(autoListen, 400);
   document.addEventListener("visibilitychange", () => { if(!document.hidden) setTimeout(autoListen, 400); });
+  // coach: a short brief the first time Jarvis opens each day (only when there are goals to talk about)
+  const today = new Date().toLocaleDateString("fr-CA");
+  if(cfg.coach !== "off" && cfg.brief !== "off" && goals.some(g => g.status === "en cours") && store.get("lastBrief", "") !== today && !keyMissing() && cfg.provider !== "local" && navigator.onLine !== false){
+    store.set("lastBrief", today);
+    setTimeout(() => { if(!busy) send("(Brief du jour, demandé automatiquement à l'ouverture de Jarvis.) En deux ou trois phrases : ma priorité d'aujourd'hui d'après mes objectifs, un encouragement lucide qui s'appuie sur mes progrès réels, et une question qui m'engage.", { hidden: true }); }, 1200);
+  }
   if("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
   if(/[#&]keep\b/.test(location.hash) && !navigator.standalone && !matchMedia("(display-mode: standalone)").matches) addMsg("sys", INSTALL_MSG);
   if(location.protocol === "file:") addMsg("sys", "Ouvre cette page depuis une adresse https (GitHub Pages) : Safari bloque le micro et les appels réseau sur un fichier local.");
