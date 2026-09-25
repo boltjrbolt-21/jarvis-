@@ -166,6 +166,7 @@ textarea::placeholder{color:var(--ink-3)}
       <select id="provider">
         <option value="claude">Claude (Anthropic)</option>
         <option value="deepseek">DeepSeek</option>
+        <option value="local">Local (sur l'iPhone, sans internet)</option>
       </select>
     </label>
     <label class="stack">Clé API Claude
@@ -194,6 +195,16 @@ textarea::placeholder{color:var(--ink-3)}
       <select id="webSel"><option value="1">Activée</option><option value="0">Désactivée</option></select>
     </label>
     <button class="iconbtn wide" id="testApi" type="button">Tester la connexion</button>
+
+    <h3>Modèle local</h3>
+    <label>Modèle
+      <select id="localModel">
+        <option value="Qwen2.5-1.5B-Instruct">Qwen 2.5 · 1,5 B (≈ 1 Go, meilleur)</option>
+        <option value="Qwen2.5-0.5B-Instruct">Qwen 2.5 · 0,5 B (≈ 400 Mo, plus léger)</option>
+      </select>
+    </label>
+    <button class="iconbtn wide" id="localLoad" type="button">Télécharger et tester le modèle local</button>
+    <span class="note" style="display:block;padding-block:6px">Tourne entièrement sur l'iPhone : rien n'est envoyé, aucune clé, aucun coût. À télécharger une fois (en Wi-Fi). Il comprend et parle moins bien que Claude, n'a pas accès à internet et ne gère que les minuteurs, la mémoire et les calculs simples. Demande iOS 26 ou plus récent (WebGPU).</span>
 
     <h3>Voix et conversation</h3>
     <label>Moteur de voix
@@ -273,6 +284,7 @@ textarea::placeholder{color:var(--ink-3)}
     provider: "claude", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
     web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
+    localModel: "Qwen2.5-1.5B-Instruct",
     tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: ""
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
@@ -928,6 +940,70 @@ textarea::placeholder{color:var(--ink-3)}
     return full;
   }
 
+  // ---- Local model (WebLLM on WebGPU): runs on the phone, no key, works offline once downloaded ----
+  const PROV_LABEL = { claude:"Claude", deepseek:"DeepSeek", local:"Local" };
+  let llm = null, llmId = null, llmLoading = null;
+  async function loadLocal(onProgress){
+    if(!navigator.gpu) throw new Error("Modèle local impossible : ce navigateur n'a pas WebGPU. Mets l'iPhone à jour (iOS 26 ou plus récent) et utilise Safari.");
+    const adapter = await navigator.gpu.requestAdapter().catch(() => null);
+    if(!adapter) throw new Error("Modèle local impossible : WebGPU est désactivé sur cet appareil.");
+    const id = cfg.localModel + (adapter.features.has("shader-f16") ? "-q4f16_1-MLC" : "-q4f32_1-MLC");
+    if(llm && llmId === id) return llm;
+    if(llmLoading) return llmLoading;
+    llmLoading = (async () => {
+      const webllm = await import("https://esm.run/@mlc-ai/web-llm");
+      if(llm){ try{ await llm.unload(); }catch{} llm = null; llmId = null; }
+      const eng = await webllm.CreateMLCEngine(id, { initProgressCallback: r => onProgress?.(r) });
+      llm = eng; llmId = id; return eng;
+    })();
+    try{ return await llmLoading; }
+    catch(e){ throw new Error("Modèle local : chargement impossible (" + String(e.message || e).slice(0,160) + "). Si l'iPhone manque de mémoire, prends le modèle 0,5 B."); }
+    finally{ llmLoading = null; }
+  }
+  // the small model can't use tools reliably: the common commands are handled here directly
+  function localCommand(text){
+    const t = text.toLowerCase();
+    const tm = /(minuteur|timer|compte à rebours|chrono)\D*?(\d+(?:[.,]\d+)?)\s*(h|heures?|min|minutes?|s|sec|secondes?)\b(?:\s*(?:pour|de)\s+(?:la |le |les |l')?(.+))?/.exec(t);
+    if(tm){
+      const n = parseFloat(tm[2].replace(",", ".")), u = tm[3][0];
+      const sec = Math.round(n * (u === "h" ? 3600 : u === "m" ? 60 : 1));
+      if(sec > 0 && sec <= 86400){ const lab = (tm[4] || "Minuteur").trim().slice(0,40); addTimer(sec, lab.charAt(0).toUpperCase() + lab.slice(1)); return `Minuteur lancé : ${fmtLeft(sec*1000)}.`; }
+    }
+    const rm = /^(?:jarvis[, ]+)?(?:retiens|souviens-toi|mémorise|n'oublie pas)\s+(?:que\s+|bien\s+que\s+)?(.+)/i.exec(text.trim());
+    if(rm){ memories.push(rm[1].trim().slice(0,200)); while(memories.length > MEM_MAX) memories.shift(); store.set("mem", memories); return "C'est noté."; }
+    const cm = /^(?:combien (?:font|fait)|calcule)\s+(.+?)\s*\??$/i.exec(text.trim());
+    if(cm){ try{ return "Ça fait " + String(calc(cm[1])).replace(".", ",") + "."; }catch{} }
+    return null;
+  }
+  async function runLocal(history, onText, signal){
+    const last = history[history.length-1];
+    const direct = typeof last?.content === "string" ? localCommand(last.content) : null;
+    if(direct){ onText(direct); return direct; }
+    const eng = await loadLocal(r => setMode("thinking", "Chargement du modèle local… " + Math.round((r.progress || 0) * 100) + " %"));
+    setMode("thinking", "Réflexion (local)…");
+    const sys = [
+      "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Tu réponds toujours en français, en une à trois phrases naturelles, sans markdown ni listes, car tes réponses sont lues à voix haute. Tu tutoies.",
+      `Maintenant : ${nowLong()}.`,
+      "Tu n'as pas accès à internet : pour l'actualité, la météo ou un fait récent, dis simplement que tu ne peux pas le savoir hors ligne.",
+      "Ce que tu sais de Kévin : " + (memories.length ? memories.slice(-40).join(" ; ") : "rien pour l'instant."),
+      notes.length ? "Ses notes : " + notes.join(" ; ") : ""
+    ].filter(Boolean).join("\n");
+    const recent = history.slice(-10); while(recent.length > 1 && recent[0].role !== "user") recent.shift();
+    const msgs = [{ role:"system", content: sys }, ...recent.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" }))];
+    const onAbort = () => { try{ eng.interruptGenerate(); }catch{} };
+    signal.addEventListener("abort", onAbort);
+    let full = "";
+    try{
+      const stream = await eng.chat.completions.create({ messages: msgs, stream: true, temperature: .6, max_tokens: 320 });
+      for await (const ch of stream){
+        const d = ch.choices?.[0]?.delta?.content;
+        if(d){ full += d; onText(full); }
+      }
+    }finally{ signal.removeEventListener("abort", onAbort); }
+    if(signal.aborted) throw new DOMException("Interrompu", "AbortError");
+    return full;
+  }
+
   // ================= send =================
   function autosize(){ input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; }
   input.addEventListener("input", () => { autosize(); if(listening){ clearTimeout(silenceT); } });
@@ -941,6 +1017,7 @@ textarea::placeholder{color:var(--ink-3)}
   function keyMissing(){
     if(cfg.provider === "deepseek" && !cfg.dsKey.trim()) return "Ajoute ta clé DeepSeek dans les réglages (bouton en haut à droite).";
     if(cfg.provider === "claude" && !cfg.claudeKey.trim()) return "Ajoute ta clé Claude dans les réglages (bouton en haut à droite).";
+    // local needs no key
     return null;
   }
 
@@ -966,12 +1043,13 @@ textarea::placeholder{color:var(--ink-3)}
 
     // photos go to Claude (DeepSeek's text models can't see them)
     let provider = cfg.provider;
+    if(img && provider === "local"){ addMsg("sys", "Le modèle local ne lit pas les photos : je réponds sans la photo."); }
     if(img && provider === "deepseek"){
       if(cfg.claudeKey.trim()){ provider = "claude"; addMsg("sys", "Photo : analysée par Claude."); }
       else { addMsg("sys", "DeepSeek ne lit pas les photos ici. Ajoute une clé Claude pour ça."); }
     }
 
-    currentMsg = addMsg("bot", "…", { cls:"thinking", who: provider === "deepseek" ? "Jarvis · DeepSeek" : "Jarvis · Claude" });
+    currentMsg = addMsg("bot", "…", { cls:"thinking", who: "Jarvis · " + PROV_LABEL[provider] });
     const txt = currentMsg.querySelector(".txt");
     toolLog = []; setBusy(true); setMode("thinking", "Réflexion…");
     ctl = new AbortController();
@@ -994,13 +1072,15 @@ textarea::placeholder{color:var(--ink-3)}
           history[history.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text } ] };
         }
         out = await runClaude(history, onText, ctl.signal);
+      }else if(provider === "local"){
+        out = await runLocal(history, onText, ctl.signal);
       }else{
         out = await runDeepSeek(history, onText, ctl.signal);
       }
       out = (out || "").trim() || "Pas de réponse.";
       txt.textContent = out;
       turns.push({ role:"assistant", content: out }); saveTurns();
-      diag.modèle = (provider === "claude" ? cfg.claudeModel : cfg.dsModel) + " · OK";
+      diag.modèle = (provider === "claude" ? cfg.claudeModel : provider === "local" ? (llmId || cfg.localModel) : cfg.dsModel) + " · OK";
       diag.dernier = `${new Date().toLocaleTimeString("fr-FR")} · ${((performance.now()-t0)/1000).toFixed(1)} s`;
       if(toolLog.length){ const d = document.createElement("div"); d.className = "tools"; d.textContent = "↳ " + [...new Set(toolLog)].join(" · "); currentMsg.append(d); }
       setBusy(false);
@@ -1031,10 +1111,10 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
-  function syncPill(){ $("provPill").textContent = cfg.provider === "deepseek" ? "DeepSeek" : "Claude"; $("modeInfo").textContent = (cfg.provider === "deepseek" ? cfg.dsModel : cfg.claudeModel.replace(/-\d{8}$/,"")); }
+  function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
   syncPill();
   function renderLists(){
     const fill = (ul, arr, key) => {
@@ -1057,7 +1137,16 @@ textarea::placeholder{color:var(--ink-3)}
   fields.forEach(f => $(f).addEventListener("change", e => { cfg[f] = e.target.value; saveCfg(); syncPill(); if(f === "provider") dsThinkingParam = true; }));
   $("webSel").onchange = e => { cfg.web = e.target.value === "1"; saveCfg(); };
   $("voiceSel").onchange = e => { cfg.voice = e.target.value; saveCfg(); speak("Voix sélectionnée.", true); };
-  $("provPill").onclick = () => { cfg.provider = cfg.provider === "claude" ? "deepseek" : "claude"; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + (cfg.provider === "deepseek" ? "DeepSeek" : "Claude")); };
+  $("provPill").onclick = () => { const order = ["claude","deepseek","local"]; cfg.provider = order[(order.indexOf(cfg.provider) + 1) % order.length]; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + PROV_LABEL[cfg.provider]); };
+  $("localLoad").onclick = async () => {
+    const b = $("localLoad"); b.disabled = true;
+    try{
+      await loadLocal(r => { b.textContent = "Téléchargement… " + Math.round((r.progress || 0) * 100) + " %"; });
+      b.textContent = "Modèle local prêt ✓";
+      addMsg("sys", "Modèle local prêt : " + llmId + ". Choisis « Local » comme modèle utilisé (ou touche la pastille en haut).");
+    }catch(e){ b.textContent = "Télécharger et tester le modèle local"; addMsg("sys", e.message); }
+    b.disabled = false;
+  };
   $("testVoice").onclick = () => {
     stopListening(); speak("Salut, c'est Jarvis. Voilà à quoi ressemble ma voix.", true);
     setTimeout(renderDiag, 4000);
@@ -1119,6 +1208,7 @@ textarea::placeholder{color:var(--ink-3)}
   }
   if(location.protocol !== "file:") setTimeout(autoListen, 400);
   document.addEventListener("visibilitychange", () => { if(!document.hidden) setTimeout(autoListen, 400); });
+  if("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
   if(location.protocol === "file:") addMsg("sys", "Ouvre cette page depuis une adresse https (GitHub Pages) : Safari bloque le micro et les appels réseau sur un fichier local.");
 })();
 </script>
