@@ -249,7 +249,7 @@ textarea::placeholder{color:var(--ink-3)}
       </select>
     </label>
     <label>Voix de l'iPhone <select id="voiceSel"></select></label>
-    <span class="note" id="iosHint" style="display:block;padding-block:6px">Pour une voix iPhone plus naturelle : Réglages iOS › Accessibilité › Contenu énoncé › Voix › Français, télécharge une voix « Premium » ou « Améliorée », puis rouvre Jarvis et choisis-la ici.</span>
+    <span class="note" id="iosHint" style="display:block;padding-block:6px">Voix Premium (ex. Audrey) : Safari ne les liste pas toujours. Choisis alors « Voix réglée dans iOS », puis dans Réglages iOS › Accessibilité › Contenu énoncé › Voix › Français, sélectionne Audrey (Premium) : Jarvis utilisera celle-là.</span>
     <label>Vitesse
       <select id="rate"><option value="0.95">Posée</option><option value="1.05">Normale</option><option value="1.2">Rapide</option></select>
     </label>
@@ -487,6 +487,7 @@ textarea::placeholder{color:var(--ink-3)}
   // ================= speech out =================
   const synth = window.speechSynthesis;
   let voices = [];
+  const SYSTEM_VOICE = "__system__";
   function loadVoices(){
     if(!synth) return;
     voices = synth.getVoices().filter(v => /^fr/i.test(v.lang));
@@ -494,11 +495,14 @@ textarea::placeholder{color:var(--ink-3)}
     const rank = v => -q(v) + (/fr-FR/i.test(v.lang) ? 0 : .5);
     voices.sort((a,b) => rank(a) - rank(b));
     const sel = $("voiceSel"); sel.innerHTML = "";
-    if(!voices.length){ const o = document.createElement("option"); o.textContent = "Voix système"; sel.append(o); return; }
+    // "system" = no voice forced: iOS then uses the French voice chosen in Réglages › Accessibilité › Contenu énoncé,
+    // which can be a downloaded Premium voice that Safari does not list
+    const sys = document.createElement("option"); sys.value = SYSTEM_VOICE; sys.textContent = "Voix réglée dans iOS (Contenu énoncé)"; sel.append(sys);
+    if(!voices.length){ cfg.voice = SYSTEM_VOICE; sel.value = SYSTEM_VOICE; return; }
     voices.forEach(v => { const o = document.createElement("option"); o.value = v.voiceURI; o.textContent = `${v.name}${["", " · améliorée", " · premium"][q(v)]} (${v.lang})`; sel.append(o); });
     // voices are keyed by voiceURI: a compact and an enhanced voice can share the same name
     const cur = voices.find(v => v.voiceURI === cfg.voice) || voices.find(v => v.name === cfg.voice);
-    cfg.voice = (cur || voices[0]).voiceURI;
+    cfg.voice = cfg.voice === SYSTEM_VOICE ? SYSTEM_VOICE : (cur || voices[0]).voiceURI;
     sel.value = cfg.voice; diag.voix = voices.length + " voix françaises";
   }
   if(synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
