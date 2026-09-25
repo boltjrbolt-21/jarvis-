@@ -261,6 +261,12 @@ textarea::placeholder{color:var(--ink-3)}
     </label>
     <button class="iconbtn wide" id="testVoice" type="button">Tester la voix</button>
 
+    <h3>Apprentissage</h3>
+    <span class="note" style="display:block">Note les réponses avec 👍 ou 👎, ou dis « non, c'est faux ». Tous les 6 avis, l'expert relit vos échanges et réécrit les règles de l'équipe : quand consulter l'expert, quand s'en passer, comment te répondre. Tu peux les modifier ici.</span>
+    <textarea id="lessons" rows="6" placeholder="Pas encore de règles apprises." style="width:100%;margin-top:8px;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.45 var(--body);max-height:none"></textarea>
+    <button class="iconbtn wide" id="reflectNow" type="button">Améliorer maintenant</button>
+    <button class="iconbtn wide" id="learnReset" type="button">Réinitialiser l'apprentissage</button>
+
     <h3>Diagnostic</h3>
     <ul class="memlist" id="diag"></ul>
     <h3>Mémoire long terme</h3>
@@ -366,15 +372,29 @@ textarea::placeholder{color:var(--ink-3)}
       // hand the exchange over to claude.ai (opens the Claude app when installed)
       const cl = document.createElement("button"); cl.type = "button"; cl.textContent = "continuer dans Claude ↗";
       cl.onclick = () => {
-        let q = el.previousElementSibling; while(q && !q.classList.contains("user")) q = q.previousElementSibling;
-        const ask = q?.querySelector(".txt")?.textContent.trim() || "";
+        const ask = questionFor(el);
         const text = (ask ? "Ma question : " + ask + "\n\n" : "") + "Réponse de mon assistant Jarvis : " + t.textContent.trim() + "\n\nApprofondis.";
         window.open(claudeLink(text), "_blank", "noopener");
       };
-      a.append(cp, rp, cl); el.append(a);
+      const up = document.createElement("button"); up.type = "button"; up.textContent = "👍";
+      const down = document.createElement("button"); down.type = "button"; down.textContent = "👎";
+      up.onclick = () => { if(el.dataset.jid && rate(el.dataset.jid, 1)) up.textContent = "👍 noté"; };
+      down.onclick = () => {
+        if(!el.dataset.jid || !rate(el.dataset.jid, -1)) return;
+        down.textContent = "👎 noté";
+        const q = questionFor(el);
+        if(q && expertOn(cfg.provider === "deepseek" ? "deepseek" : "claude") && !el.querySelector(".redo")){
+          let box = el.querySelector(".actions"); if(!box){ box = document.createElement("div"); box.className = "actions"; el.append(box); }
+          const redo = document.createElement("button"); redo.type = "button"; redo.className = "action redo"; redo.textContent = "Redemander à l'expert";
+          redo.onclick = () => { if(busy) return; redo.remove(); forceExpertOnce = true; send(q); };
+          box.append(redo);
+        }
+      };
+      a.append(up, down, cp, rp, cl); el.append(a);
     }
     log.append(el); scroll(); return el;
   }
+  function questionFor(el){ let q = el.previousElementSibling; while(q && !q.classList.contains("user")) q = q.previousElementSibling; return q?.querySelector(".txt")?.textContent.trim() || ""; }
   function addAction(msgEl, label, href, raw, sameTab){
     let box = msgEl.querySelector(".actions");
     if(!box){ box = document.createElement("div"); box.className = "actions"; msgEl.append(box); }
@@ -795,6 +815,8 @@ textarea::placeholder{color:var(--ink-3)}
       `Maintenant : ${nowLong()} (Europe/Paris).`,
       webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
       "Si l'utilisateur veut continuer, approfondir ou envoyer quelque chose dans Claude ou claude.ai, utilise show_link avec kind « claude ».",
+      lessons ? "Règles d'équipe apprises de tes échanges avec Kévin, à appliquer :\n" + lessons : "",
+      expert && forceExpertOnce ? "Kévin a jugé ta réponse précédente insuffisante : pour cette question, consulte obligatoirement ask_expert avant de répondre." : "",
       expert ? "Tu travailles avec un expert plus puissant : pour une question difficile ou importante (santé, médicaments, raisonnement complexe), consulte ask_expert, puis donne sa réponse en l'abrégeant pour l'oral, sans dire que tu l'as consulté sauf si on te le demande." : "",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
       "Jarvis s'arrête quand la page est fermée : mémoire et notes restent enregistrées, mais un minuteur ne sonne que si Jarvis reste ouvert. Pour un rendez-vous, un rappel à une date ou une heure, ou un minuteur long, utilise add_event (alerte du Calendrier de l'iPhone, fiable même Jarvis fermé) puis dis en une phrase de toucher « Ajouter au Calendrier ».",
@@ -835,12 +857,12 @@ textarea::placeholder{color:var(--ink-3)}
     description:"Consulte un modèle bien plus puissant pour une question difficile : santé, médicaments, posologies, pharmacologie, raisonnement complexe, calcul délicat, conseil important, texte long. Donne la question complète avec le contexte utile. Il répond en détail ; tu résumes ensuite pour l'oral. Pas pour les questions simples ni la conversation courante.",
     parameters: obj({ question:{type:"string", description:"La question complète, avec le contexte"} }, ["question"]),
     run: async (i, signal) => { toolLog.push("expert " + expertName()); setMode("thinking", "Consultation de l'expert " + expertName() + "…"); return await askExpert(String(i.question || ""), signal); } };
-  async function askExpert(question, signal){
+  async function askExpert(question, signal, systemOverride){
     let resp;
     try{
       resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", signal, headers: claudeHeaders(),
-        body: JSON.stringify({ model: cfg.expert, max_tokens: 4000,
-          system: "Tu es l'expert consulté par Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Réponds en français, de façon exacte et précise, en allant à l'essentiel. Signale tes incertitudes et, en santé, les précautions importantes. Jarvis reformulera ta réponse pour l'oral." + (memories.length ? "\nCe que l'on sait de Kévin : " + memories.slice(-30).join(" ; ") : ""),
+        body: JSON.stringify({ model: cfg.expert && cfg.expert !== "none" ? cfg.expert : cfg.claudeModel, max_tokens: 4000,
+          system: systemOverride || "Tu es l'expert consulté par Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Réponds en français, de façon exacte et précise, en allant à l'essentiel. Signale tes incertitudes et, en santé, les précautions importantes. Jarvis reformulera ta réponse pour l'oral." + (memories.length ? "\nCe que l'on sait de Kévin : " + memories.slice(-30).join(" ; ") : ""),
           messages:[{ role:"user", content: question }] }) });
     }catch(err){ throw netError("Claude", err); }
     if(!resp.ok) throw await apiError(resp, "Expert");
@@ -1047,6 +1069,7 @@ textarea::placeholder{color:var(--ink-3)}
       "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Tu réponds toujours en français, en une à trois phrases naturelles, sans markdown ni listes, car tes réponses sont lues à voix haute. Tu tutoies.",
       `Maintenant : ${nowLong()}.`,
       "Tu n'as pas accès à internet : pour l'actualité, la météo ou un fait récent, dis simplement que tu ne peux pas le savoir hors ligne.",
+      lessons ? "Règles à suivre : " + lessons.split("\n").slice(0,5).join(" ") : "",
       "Ce que tu sais de Kévin : " + (memories.length ? memories.slice(-40).join(" ; ") : "rien pour l'instant."),
       notes.length ? "Ses notes : " + notes.join(" ; ") : ""
     ].filter(Boolean).join("\n");
@@ -1064,6 +1087,44 @@ textarea::placeholder{color:var(--ink-3)}
     }finally{ signal.removeEventListener("abort", onAbort); }
     if(signal.aborted) throw new DOMException("Interrompu", "AbortError");
     return full;
+  }
+
+  // ================= learning: feedback journal + periodic self-review by the expert =================
+  let journal = store.get("journal", []);          // [{id, t, q, a, by, expert, ms, fb}]
+  let lessons = store.get("lessons", "");
+  const learn = Object.assign({ rated: 0, count: 0, lastAt: 0 }, store.get("learn", {}));
+  let forceExpertOnce = false, reflecting = false;
+  const REFLECT_EVERY = 6;
+  const saveLearn = () => { store.set("journal", journal.slice(-60)); store.set("learn", learn); };
+  function logExchange(q, a, by, expert, ms){
+    const e = { id: Date.now().toString(36) + Math.random().toString(36).slice(2,5), t: Date.now(), q: String(q).slice(0,240), a: String(a).slice(0,360), by, expert, ms: Math.round(ms), fb: 0 };
+    journal.push(e); journal = journal.slice(-60); saveLearn(); return e.id;
+  }
+  function rate(id, fb){
+    const e = journal.find(x => x.id === id); if(!e || e.fb === fb) return false;
+    if(!e.fb) learn.rated++;
+    e.fb = fb; saveLearn();
+    if(learn.rated >= REFLECT_EVERY && cfg.claudeKey.trim() && navigator.onLine !== false) reflect(false);
+    return true;
+  }
+  const CORRECTION_RE = /^(non\b|faux\b|c'est faux|tu te trompes|tu t'es trompé|n'importe quoi|mauvaise réponse|c'est pas ça|ce n'est pas ça|pas du tout)/i;
+  async function reflect(manual){
+    if(reflecting) return;
+    if(!cfg.claudeKey.trim()){ if(manual) addMsg("sys", "L'apprentissage a besoin de la clé Claude."); return; }
+    if(journal.filter(e => e.fb).length < 3){ if(manual) addMsg("sys", "Pas encore assez d'avis : note au moins 3 réponses avec 👍 ou 👎."); return; }
+    reflecting = true;
+    try{
+      const lines = journal.slice(-40).map(e => `[${e.fb > 0 ? "👍" : e.fb < 0 ? "👎" : "·"}] ${e.by}${e.expert ? " + expert" : ""}, ${(e.ms/1000).toFixed(1)} s | Q : ${e.q} | R : ${e.a}`).join("\n");
+      const prompt = `Tu améliores Jarvis, un assistant vocal qui fonctionne en équipe : un modèle rapide (${cfg.claudeModel}) répond et peut consulter un expert (${cfg.expert}) pour les questions difficiles ; DeepSeek sert de secours et un petit modèle local fonctionne hors ligne.\n\nJournal récent (👍 réponse appréciée, 👎 réponse jugée mauvaise, · sans avis) :\n${lines}\n\nRègles actuelles :\n${lessons || "(aucune)"}\n\nÉcris les nouvelles règles de l'équipe : au plus 10 lignes courtes et concrètes, une règle par ligne, à l'impératif, adressées au modèle rapide, sans titre, sans numéro ni puce. Couvre : les types de questions où il doit consulter l'expert (là où il a eu des 👎 seul), ceux où il doit s'en passer (questions simples : rapidité et coût), et la façon de répondre que Kévin préfère. Garde les règles actuelles qui restent valables, retire celles que le journal contredit.`;
+      const out = await askExpert(prompt, undefined, "Tu analyses le fonctionnement d'un assistant et tu rédiges des consignes brèves et actionnables, en français.");
+      const rules = out.split(/\n+/).map(l => l.replace(/^\s*(?:[-•*·–—]|\d+[.)])\s*/, "").replace(/\*\*/g, "").trim()).filter(l => l.length > 8 && !/:\s*$/.test(l)).slice(0, 10);
+      if(!rules.length) throw new Error("réponse vide");
+      lessons = rules.join("\n").slice(0, 1600); store.set("lessons", lessons);
+      learn.rated = 0; learn.count++; learn.lastAt = Date.now(); saveLearn();
+      if(!$("sheet").hidden) $("lessons").value = lessons;
+      addMsg("sys", `Jarvis s'est amélioré : ${rules.length} règles d'équipe mises à jour (voir Réglages › Apprentissage).`);
+    }catch(e){ if(manual) addMsg("sys", "Amélioration impossible : " + e.message); }
+    finally{ reflecting = false; }
   }
 
   // ================= send =================
@@ -1098,6 +1159,14 @@ textarea::placeholder{color:var(--ink-3)}
     const missing = keyMissing();
     if(missing){ addMsg("sys", missing); $("setBtn").click(); return; }
     stopSpeaking(); stopListening();
+    // "non, c'est faux" right after an answer counts as a 👎 and sends the next answer through the expert
+    const prevJ = journal[journal.length-1];
+    if(CORRECTION_RE.test(text.trim()) && prevJ && !prevJ.fb && Date.now() - prevJ.t < 10*60000){
+      rate(prevJ.id, -1);
+      const prevEl = [...log.querySelectorAll(".msg.bot")].find(m => m.dataset.jid === prevJ.id);
+      prevEl?.querySelectorAll(".mactions button").forEach(b => { if(b.textContent === "👎") b.textContent = "👎 noté"; });
+      forceExpertOnce = true;
+    }
     const img = pendingImg; clearImg();
     addMsg("user", text, { img: img ? URL.createObjectURL(img) : null });
     turns.push({ role:"user", content: text + (img ? " [photo jointe]" : "") });
@@ -1153,6 +1222,8 @@ textarea::placeholder{color:var(--ink-3)}
       out = (out || "").trim() || "Pas de réponse.";
       txt.textContent = out;
       turns.push({ role:"assistant", content: out }); saveTurns();
+      currentMsg.dataset.jid = logExchange(text, out, usedBy, toolLog.some(x => x.startsWith("expert")), performance.now() - t0);
+      forceExpertOnce = false;
       diag.modèle = (usedBy === "claude" ? cfg.claudeModel : usedBy === "local" ? (llmId || cfg.localModel) : cfg.dsModel) + (provider === "auto" ? " (auto)" : "") + " · OK";
       diag.dernier = `${new Date().toLocaleTimeString("fr-FR")} · ${((performance.now()-t0)/1000).toFixed(1)} s`;
       if(toolLog.length){ const d = document.createElement("div"); d.className = "tools"; d.textContent = "↳ " + [...new Set(toolLog)].join(" · "); currentMsg.append(d); }
@@ -1160,7 +1231,7 @@ textarea::placeholder{color:var(--ink-3)}
       speakAppend(out.slice(Math.min(spokenUpTo, out.length)));
       if(!speaking) afterSpeech();
     }catch(e){
-      setBusy(false);
+      setBusy(false); forceExpertOnce = false;
       currentMsg.classList.remove("thinking");
       turns.pop(); saveTurns();
       if(e.name === "AbortError"){ txt.textContent = txt.textContent === "…" ? "Interrompu." : txt.textContent; }
@@ -1198,11 +1269,13 @@ textarea::placeholder{color:var(--ink-3)}
     fill($("memlist"), memories, "mem"); fill($("notelist"), notes, "notes");
   }
   function renderDiag(){
+    diag.apprentissage = `${journal.filter(e => e.fb > 0).length} 👍 · ${journal.filter(e => e.fb < 0).length} 👎 · ${lessons ? lessons.split("\n").length : 0} règles · ${learn.count} bilan${learn.count > 1 ? "s" : ""}`;
     const ul = $("diag"); ul.innerHTML = "";
     Object.entries(diag).forEach(([k, v]) => { const li = document.createElement("li"); const a = document.createElement("span"); a.textContent = k; const b = document.createElement("span"); b.textContent = v; li.append(a, b); ul.append(li); });
   }
   $("setBtn").onclick = () => {
     fields.forEach(f => { $(f).value = cfg[f]; });
+    $("lessons").value = lessons;
     $("webSel").value = cfg.web ? "1" : "0"; syncTts();
     if(voices.length) $("voiceSel").value = cfg.voice;
     renderLists(); renderDiag(); $("sheet").hidden = false;
@@ -1259,6 +1332,9 @@ textarea::placeholder{color:var(--ink-3)}
     $("impText").value = ""; $("impBox").hidden = true; renderLists();
     addMsg("sys", facts.length ? `${facts.length} fait${facts.length > 1 ? "s" : ""} importé${facts.length > 1 ? "s" : ""} dans la mémoire de Jarvis.` : "Rien à importer : colle la réponse de Claude, un fait par ligne.");
   };
+  $("lessons").addEventListener("change", e => { lessons = e.target.value.trim().slice(0, 1600); store.set("lessons", lessons); });
+  $("reflectNow").onclick = async () => { const b = $("reflectNow"); b.disabled = true; b.textContent = "Analyse en cours…"; await reflect(true); b.disabled = false; b.textContent = "Améliorer maintenant"; };
+  $("learnReset").onclick = () => { journal = []; lessons = ""; learn.rated = 0; learn.count = 0; saveLearn(); store.set("lessons", ""); $("lessons").value = ""; renderDiag(); addMsg("sys", "Apprentissage réinitialisé."); };
   $("clearChat").onclick = () => { turns = []; saveTurns(); log.innerHTML = ""; addMsg("sys", "Conversation effacée. Mémoire et notes conservées."); $("sheet").hidden = true; };
   $("closeSheet").onclick = () => { $("sheet").hidden = true; };
   $("sheet").onclick = e => { if(e.target.id === "sheet") $("sheet").hidden = true; };
