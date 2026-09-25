@@ -164,6 +164,7 @@ textarea::placeholder{color:var(--ink-3)}
     <h3>Cerveau</h3>
     <label>Modèle utilisé
       <select id="provider">
+        <option value="auto">Auto : équipe d'IA (recommandé)</option>
         <option value="claude">Claude (Anthropic)</option>
         <option value="deepseek">DeepSeek</option>
         <option value="local">Local (sur l'iPhone, sans internet)</option>
@@ -191,6 +192,14 @@ textarea::placeholder{color:var(--ink-3)}
       <input id="dsBase" type="url" autocomplete="off" autocapitalize="off" spellcheck="false">
       <span class="note">À changer seulement si Safari ne joint pas DeepSeek : mets l'adresse de ton relais (fichier deepseek-relais.js).</span>
     </label>
+    <label>Expert à consulter
+      <select id="expert">
+        <option value="claude-sonnet-5">Sonnet 5 (bon rapport qualité-prix)</option>
+        <option value="claude-opus-5-5">Opus 5.5 (le plus fort, plus cher)</option>
+        <option value="none">Aucun</option>
+      </select>
+    </label>
+    <span class="note" style="display:block;padding-block:6px">Pour les questions difficiles (santé, médicaments, raisonnement), le modèle rapide consulte l'expert puis te résume sa réponse. Utilise la clé Claude.</span>
     <label>Recherche web
       <select id="webSel"><option value="1">Activée</option><option value="0">Désactivée</option></select>
     </label>
@@ -281,7 +290,7 @@ textarea::placeholder{color:var(--ink-3)}
 
   // ================= state =================
   const cfg = Object.assign({
-    provider: "claude", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
+    provider: "auto", expert: "claude-sonnet-5", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
     web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
     localModel: "Qwen2.5-1.5B-Instruct",
@@ -779,19 +788,20 @@ textarea::placeholder{color:var(--ink-3)}
     neutre: "Style : naturel et chaleureux, bref. Tu tutoies.",
     majordome: "Style : majordome britannique pince-sans-rire, tu vouvoies et dis « Monsieur », mais tu restes bref."
   };
-  function systemPrompt(webOn){
+  function systemPrompt(webOn, expert){
     return [
       "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. " + STYLES[cfg.persona],
       "Tes réponses sont LUES À VOIX HAUTE : écris comme on parle, avec des tournures orales naturelles, des phrases qui s'enchaînent et des virgules là où l'on respire. Une ou deux phrases par défaut, sans markdown, sans listes, sans emoji, sans URL, sans abréviations ni symboles (écris « degrés », « pour cent », « kilomètres »). Pour une action (minuteur, note, mémoire), confirme en quelques mots.",
       `Maintenant : ${nowLong()} (Europe/Paris).`,
       webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
       "Si l'utilisateur veut continuer, approfondir ou envoyer quelque chose dans Claude ou claude.ai, utilise show_link avec kind « claude ».",
+      expert ? "Tu travailles avec un expert plus puissant : pour une question difficile ou importante (santé, médicaments, raisonnement complexe), consulte ask_expert, puis donne sa réponse en l'abrégeant pour l'oral, sans dire que tu l'as consulté sauf si on te le demande." : "",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
       "Jarvis s'arrête quand la page est fermée : mémoire et notes restent enregistrées, mais un minuteur ne sonne que si Jarvis reste ouvert. Pour un rendez-vous, un rappel à une date ou une heure, ou un minuteur long, utilise add_event (alerte du Calendrier de l'iPhone, fiable même Jarvis fermé) puis dis en une phrase de toucher « Ajouter au Calendrier ».",
       "Minuteurs en cours : " + (timers.filter(t => !t.done).map(t => `${t.label} (reste ${fmtLeft(t.end - Date.now())})`).join(", ") || "aucun") + ".",
       "Mémoire : " + (memories.length ? memories.map(m => "- " + m).join("\n") : "vide"),
       "Notes : " + (notes.length ? notes.map(n => "- " + n).join("\n") : "aucune")
-    ].join("\n");
+    ].filter(Boolean).join("\n");
   }
 
   // ================= network helpers =================
@@ -818,17 +828,41 @@ textarea::placeholder{color:var(--ink-3)}
   const claudeHeaders = () => ({ "content-type":"application/json", "x-api-key": cfg.claudeKey.trim(), "anthropic-version":"2023-06-01", "anthropic-dangerous-direct-browser-access":"true" });
   const WEB_SERVER_TOOL = { type:"web_search_20250305", name:"web_search", max_uses:3, user_location:{ type:"approximate", city:"Dijon", region:"Bourgogne-Franche-Comté", country:"FR", timezone:"Europe/Paris" } };
 
+  // ---- Expert agent: the fast model hands hard questions to a stronger Claude, then condenses the answer ----
+  const expertOn = front => cfg.expert && cfg.expert !== "none" && !!cfg.claudeKey.trim() && !(front === "claude" && cfg.claudeModel === cfg.expert);
+  const expertName = () => /opus/.test(cfg.expert) ? "Opus" : "Sonnet";
+  const EXPERT_TOOL = { name:"ask_expert",
+    description:"Consulte un modèle bien plus puissant pour une question difficile : santé, médicaments, posologies, pharmacologie, raisonnement complexe, calcul délicat, conseil important, texte long. Donne la question complète avec le contexte utile. Il répond en détail ; tu résumes ensuite pour l'oral. Pas pour les questions simples ni la conversation courante.",
+    parameters: obj({ question:{type:"string", description:"La question complète, avec le contexte"} }, ["question"]),
+    run: async (i, signal) => { toolLog.push("expert " + expertName()); setMode("thinking", "Consultation de l'expert " + expertName() + "…"); return await askExpert(String(i.question || ""), signal); } };
+  async function askExpert(question, signal){
+    let resp;
+    try{
+      resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", signal, headers: claudeHeaders(),
+        body: JSON.stringify({ model: cfg.expert, max_tokens: 4000,
+          system: "Tu es l'expert consulté par Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Réponds en français, de façon exacte et précise, en allant à l'essentiel. Signale tes incertitudes et, en santé, les précautions importantes. Jarvis reformulera ta réponse pour l'oral." + (memories.length ? "\nCe que l'on sait de Kévin : " + memories.slice(-30).join(" ; ") : ""),
+          messages:[{ role:"user", content: question }] }) });
+    }catch(err){ throw netError("Claude", err); }
+    if(!resp.ok) throw await apiError(resp, "Expert");
+    const j = await resp.json();
+    if(j.stop_reason === "refusal") return "L'expert a refusé de répondre à cette question.";
+    const text = (j.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+    return text || "L'expert n'a pas donné de réponse.";
+  }
+
   // ---- Claude (streaming, local tools + Anthropic web search) ----
   async function runClaude(messages, onText, signal){
     const webOn = cfg.web;
-    const tools = TOOLS.map(t => ({ name:t.name, description:t.description, input_schema:t.parameters }));
-    if(webOn) tools.push(WEB_SERVER_TOOL);
+    const toolset = [...TOOLS, ...(expertOn("claude") ? [EXPERT_TOOL] : [])];
+    const tools = toolset.map(t => ({ name:t.name, description:t.description, input_schema:t.parameters }));
+    // newer models take the web search variant with dynamic filtering; Haiku keeps the basic one
+    if(webOn) tools.push(/haiku/.test(cfg.claudeModel) ? WEB_SERVER_TOOL : { ...WEB_SERVER_TOOL, type:"web_search_20260209" });
     let full = "";
     for(let round = 0; round < 6; round++){
       let resp;
       try{
         resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", signal, headers: claudeHeaders(),
-          body: JSON.stringify({ model: cfg.claudeModel, max_tokens: 1024, system: systemPrompt(webOn), messages, tools, stream: true }) });
+          body: JSON.stringify({ model: cfg.claudeModel, max_tokens: 1024, system: systemPrompt(webOn, expertOn("claude")), messages, tools, stream: true }) });
       }catch(err){ throw netError("Claude", err); }
       if(!resp.ok) throw await apiError(resp, "Claude");
       const blocks = []; let stop = null;
@@ -856,7 +890,7 @@ textarea::placeholder{color:var(--ink-3)}
         messages.push({ role:"assistant", content });
         const results = [];
         for(const b of content.filter(b => b.type === "tool_use")){
-          const r = await runTool(TOOLS, b.name, b.input, signal);
+          const r = await runTool(toolset, b.name, b.input, signal);
           results.push({ type:"tool_result", tool_use_id: b.id, content: r.text, is_error: r.error });
         }
         messages.push({ role:"user", content: results });
@@ -889,8 +923,8 @@ textarea::placeholder{color:var(--ink-3)}
   let dsThinkingParam = true;
   async function runDeepSeek(history, onText, signal){
     const webOn = cfg.web && !!cfg.claudeKey.trim();
-    const tools = [...TOOLS, ...(webOn ? [WEB_TOOL] : [])];
-    const messages = [{ role:"system", content: systemPrompt(webOn) }, ...history];
+    const tools = [...TOOLS, ...(webOn ? [WEB_TOOL] : []), ...(expertOn("deepseek") ? [EXPERT_TOOL] : [])];
+    const messages = [{ role:"system", content: systemPrompt(webOn, expertOn("deepseek")) }, ...history];
     const base = (cfg.dsBase || "https://api.deepseek.com").replace(/\/+$/,"");
     let full = "";
     for(let round = 0; round < 6; round++){
@@ -941,7 +975,35 @@ textarea::placeholder{color:var(--ink-3)}
   }
 
   // ---- Local model (WebLLM on WebGPU): runs on the phone, no key, works offline once downloaded ----
-  const PROV_LABEL = { claude:"Claude", deepseek:"DeepSeek", local:"Local" };
+  const PROV_LABEL = { auto:"Auto", claude:"Claude", deepseek:"DeepSeek", local:"Local" };
+  const localReady = () => !!llm || !!store.get("localReady", null);
+
+  // ---- Auto: the team. Free local commands first, then Claude (with its expert), DeepSeek as backup, local model when offline ----
+  async function runAuto(textHistory, claudeHistory, onText, signal, hasImg){
+    const last = textHistory[textHistory.length-1]?.content;
+    if(typeof last === "string" && !hasImg){ const d = localCommand(last); if(d){ onText(d); return { out: d, by: "local" }; } }
+    const online = navigator.onLine !== false;
+    const chain = [];
+    if(online && cfg.claudeKey.trim()) chain.push("claude");
+    if(online && cfg.dsKey.trim() && !hasImg) chain.push("deepseek");
+    if(localReady() && !hasImg) chain.push("local");
+    if(!chain.length) throw new Error(online ? "Aucun modèle disponible : ajoute une clé Claude ou DeepSeek, ou télécharge le modèle local." : "Pas de réseau et le modèle local n'est pas téléchargé (Réglages › Modèle local, en Wi-Fi).");
+    let lastErr;
+    for(const p of chain){
+      try{
+        const out = p === "claude" ? await runClaude(claudeHistory.slice(), onText, signal)
+                  : p === "deepseek" ? await runDeepSeek(textHistory.slice(), onText, signal)
+                  : await runLocal(textHistory.slice(), onText, signal);
+        return { out, by: p };
+      }catch(e){
+        if(e.name === "AbortError") throw e;
+        lastErr = e;
+        const next = chain[chain.indexOf(p) + 1];
+        if(next) addMsg("sys", `${PROV_LABEL[p]} indisponible (${e.message.slice(0,90)}) : ${PROV_LABEL[next]} prend le relais.`);
+      }
+    }
+    throw lastErr;
+  }
   let llm = null, llmId = null, llmLoading = null;
   async function loadLocal(onProgress){
     if(!navigator.gpu) throw new Error("Modèle local impossible : ce navigateur n'a pas WebGPU. Mets l'iPhone à jour (iOS 26 ou plus récent) et utilise Safari.");
@@ -954,7 +1016,7 @@ textarea::placeholder{color:var(--ink-3)}
       const webllm = await import("https://esm.run/@mlc-ai/web-llm");
       if(llm){ try{ await llm.unload(); }catch{} llm = null; llmId = null; }
       const eng = await webllm.CreateMLCEngine(id, { initProgressCallback: r => onProgress?.(r) });
-      llm = eng; llmId = id; return eng;
+      llm = eng; llmId = id; store.set("localReady", id); return eng;
     })();
     try{ return await llmLoading; }
     catch(e){ throw new Error("Modèle local : chargement impossible (" + String(e.message || e).slice(0,160) + "). Si l'iPhone manque de mémoire, prends le modèle 0,5 B."); }
@@ -1017,6 +1079,7 @@ textarea::placeholder{color:var(--ink-3)}
   function keyMissing(){
     if(cfg.provider === "deepseek" && !cfg.dsKey.trim()) return "Ajoute ta clé DeepSeek dans les réglages (bouton en haut à droite).";
     if(cfg.provider === "claude" && !cfg.claudeKey.trim()) return "Ajoute ta clé Claude dans les réglages (bouton en haut à droite).";
+    if(cfg.provider === "auto" && !cfg.claudeKey.trim() && !cfg.dsKey.trim() && !localReady()) return "Ajoute une clé Claude ou DeepSeek dans les réglages, ou télécharge le modèle local.";
     // local needs no key
     return null;
   }
@@ -1064,9 +1127,19 @@ textarea::placeholder{color:var(--ink-3)}
     };
     const history = turns.map(t => ({ role:t.role, content:t.content }));
     const t0 = performance.now();
+    let usedBy = provider;
     try{
       let out;
-      if(provider === "claude"){
+      if(provider === "auto"){
+        const claudeHistory = history.slice();
+        if(img){
+          const b = await fileToB64(img);
+          claudeHistory[claudeHistory.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text } ] };
+        }
+        const r = await runAuto(history, claudeHistory, onText, ctl.signal, !!img);
+        out = r.out; usedBy = r.by;
+        currentMsg.querySelector(".who").textContent = "Jarvis · " + PROV_LABEL[r.by] + (toolLog.some(x => x.startsWith("expert")) ? " + expert " + expertName() : "");
+      }else if(provider === "claude"){
         if(img){
           const b = await fileToB64(img);
           history[history.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text } ] };
@@ -1080,7 +1153,7 @@ textarea::placeholder{color:var(--ink-3)}
       out = (out || "").trim() || "Pas de réponse.";
       txt.textContent = out;
       turns.push({ role:"assistant", content: out }); saveTurns();
-      diag.modèle = (provider === "claude" ? cfg.claudeModel : provider === "local" ? (llmId || cfg.localModel) : cfg.dsModel) + " · OK";
+      diag.modèle = (usedBy === "claude" ? cfg.claudeModel : usedBy === "local" ? (llmId || cfg.localModel) : cfg.dsModel) + (provider === "auto" ? " (auto)" : "") + " · OK";
       diag.dernier = `${new Date().toLocaleTimeString("fr-FR")} · ${((performance.now()-t0)/1000).toFixed(1)} s`;
       if(toolLog.length){ const d = document.createElement("div"); d.className = "tools"; d.textContent = "↳ " + [...new Set(toolLog)].join(" · "); currentMsg.append(d); }
       setBusy(false);
@@ -1111,10 +1184,10 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
-  function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
+  function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
   syncPill();
   function renderLists(){
     const fill = (ul, arr, key) => {
@@ -1137,7 +1210,7 @@ textarea::placeholder{color:var(--ink-3)}
   fields.forEach(f => $(f).addEventListener("change", e => { cfg[f] = e.target.value; saveCfg(); syncPill(); if(f === "provider") dsThinkingParam = true; }));
   $("webSel").onchange = e => { cfg.web = e.target.value === "1"; saveCfg(); };
   $("voiceSel").onchange = e => { cfg.voice = e.target.value; saveCfg(); speak("Voix sélectionnée.", true); };
-  $("provPill").onclick = () => { const order = ["claude","deepseek","local"]; cfg.provider = order[(order.indexOf(cfg.provider) + 1) % order.length]; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + PROV_LABEL[cfg.provider]); };
+  $("provPill").onclick = () => { const order = ["auto","claude","deepseek","local"]; cfg.provider = order[(order.indexOf(cfg.provider) + 1) % order.length]; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + PROV_LABEL[cfg.provider]); };
   $("localLoad").onclick = async () => {
     const b = $("localLoad"); b.disabled = true;
     try{
