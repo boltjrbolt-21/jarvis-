@@ -613,6 +613,15 @@ textarea::placeholder{color:var(--ink-3)}
   if(synth){ loadVoices(); synth.onvoiceschanged = loadVoices; }
 
   let actx = null, unlocked = false;
+  function setAudioMode(mode){
+    try{
+      if(navigator.audioSession) navigator.audioSession.type = mode;
+      return true;
+    }catch(e){
+      diag.micro = "session audio : " + (e.message || e.name || "indisponible");
+      return false;
+    }
+  }
   // one <audio> element, unlocked by the first touch, plays every ElevenLabs chunk (it also ignores the silent switch)
   const player = new Audio(); player.setAttribute("playsinline", ""); player.preload = "auto";
   const SILENT = "data:audio/wav;base64,UklGRjQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YRAAAACAgICAgICAgICAgICAgICA";
@@ -622,7 +631,7 @@ textarea::placeholder{color:var(--ink-3)}
   function unlockAudio(){
     if(unlocked) return; unlocked = true;
     showUnlockHint(false);
-    try{ if(navigator.audioSession) navigator.audioSession.type = "playback"; }catch{}
+    setAudioMode("playback");
     try{ player.src = SILENT; player.play().catch(() => {}); }catch{}
     try{ if(synth){ const u = new SpeechSynthesisUtterance("ok"); u.volume = .01; u.rate = 2; u.lang = "fr-FR"; synth.speak(u); } }catch{}
     try{ if(!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); actx.resume?.(); }catch{}
@@ -658,6 +667,7 @@ textarea::placeholder{color:var(--ink-3)}
       showUnlockHint(true); return;
     }
     const parts = chunkText(text); if(!parts.length) return;
+    setAudioMode("playback");
     queue.push(...parts.map(t => ({ text: t, p: null })));
     if(eleven && !queue[0].p) queue[0].p = elFetch(queue[0].text);   // start fetching at once
     if(!speaking){
@@ -771,6 +781,7 @@ textarea::placeholder{color:var(--ink-3)}
   function startListening(){
     if(!SR || !conv || listening || busy || speaking) return;
     try{
+      setAudioMode("play-and-record");
       rec = new SR();
       rec.lang = "fr-FR"; rec.interimResults = true; rec.continuous = true; rec.maxAlternatives = 1;
       heard = "";
@@ -805,6 +816,7 @@ textarea::placeholder{color:var(--ink-3)}
   function startStopWatch(){
     if(!SR || cfg.stopWord === "0" || !conv || stopRec) return;
     try{
+      setAudioMode("play-and-record");
       const r = new SR(); r.lang = "fr-FR"; r.interimResults = true; r.continuous = true;
       r.onresult = e => {
         // only short utterances count, so Jarvis' own voice saying "arrête" mid-sentence is ignored
@@ -1495,6 +1507,8 @@ textarea::placeholder{color:var(--ink-3)}
     if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){ addMsg("sys", "L'enregistrement audio n'est pas disponible ici : ouvre Jarvis dans Safari."); return false; }
     try{
       stopSpeaking(); conv=false; stopListening();
+      setAudioMode("play-and-record");
+      await new Promise(ok => setTimeout(ok, 80));
       recStream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }, video:false });
       const mime = ["audio/mp4","audio/webm;codecs=opus","audio/webm"].find(x => MediaRecorder.isTypeSupported?.(x)) || "";
       mediaRec = new MediaRecorder(recStream, mime ? { mimeType:mime } : undefined); recChunks=[]; recFinal=""; recInterim=""; recStarted=Date.now();
@@ -1504,11 +1518,11 @@ textarea::placeholder{color:var(--ink-3)}
         const item={ id:"rec-"+Date.now().toString(36), title:String(title || "Enregistrement du " + new Date(recStarted).toLocaleString("fr-FR",{day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"})).slice(0,120), created:recStarted, duration, mime:blob.type, transcript:(recFinal+" "+recInterim).trim(), blob };
         try{ await recPut(item); addMsg("sys", `Enregistrement sauvegardé sur l'iPhone (${recClock(duration)}).${item.transcript ? " Transcription prête." : " Aucune transcription détectée."}`); diag.enregistrement="OK · "+recClock(duration); }
         catch(e){ addMsg("sys", "Audio enregistré, mais la sauvegarde locale a échoué : "+e.message); diag.enregistrement="erreur de sauvegarde"; }
-        recStream?.getTracks().forEach(t=>t.stop()); recStream=null; mediaRec=null; recChunks=[]; $("recPanel").hidden=true; $("recBtn").classList.remove("on"); $("recBtn").setAttribute("aria-pressed","false"); clearInterval(recTick); keepAwake(false); renderRecordings();
+        recStream?.getTracks().forEach(t=>t.stop()); recStream=null; mediaRec=null; recChunks=[]; setAudioMode("playback"); $("recPanel").hidden=true; $("recBtn").classList.remove("on"); $("recBtn").setAttribute("aria-pressed","false"); clearInterval(recTick); keepAwake(false); renderRecordings();
       };
       mediaRec.start(1000); $("recTitle").textContent=title || "Enregistrement en cours"; $("recPanel").hidden=false; $("recBtn").classList.add("on"); $("recBtn").setAttribute("aria-pressed","true"); $("recTime").textContent="00:00"; updateRecTranscript();
       recTick=setInterval(()=>$("recTime").textContent=recClock(Date.now()-recStarted),1000); keepAwake(true); startRecordRecognition(); diag.enregistrement="en cours"; return true;
-    }catch(e){ recStream?.getTracks().forEach(t=>t.stop()); recStream=null; mediaRec=null; diag.enregistrement="erreur : "+e.name; addMsg("sys", e.name === "NotAllowedError" ? "Micro refusé. Autorise le microphone dans les réglages Safari du site." : "Enregistrement impossible ("+(e.message||e.name)+")."); return false; }
+    }catch(e){ recStream?.getTracks().forEach(t=>t.stop()); recStream=null; mediaRec=null; setAudioMode("playback"); diag.enregistrement="erreur : "+e.name; addMsg("sys", e.name === "NotAllowedError" ? "Micro refusé. Autorise le microphone dans les réglages Safari du site." : "Enregistrement impossible ("+(e.message||e.name)+")."); return false; }
   }
   function stopRecording(){ if(!recording()) return; try{ recordRec?.stop(); }catch{} recordRec=null; try{ mediaRec.stop(); }catch{} }
   async function summarizeRecording(id){
