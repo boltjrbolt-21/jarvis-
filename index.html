@@ -219,6 +219,8 @@ textarea::placeholder{color:var(--ink-3)}
     <span class="note" style="display:block;padding-block:6px">Tourne entièrement sur l'iPhone : rien n'est envoyé, aucune clé, aucun coût. À télécharger une fois (en Wi-Fi). Il comprend et parle moins bien que Claude, n'a pas accès à internet et ne gère que les minuteurs, la mémoire et les calculs simples. Demande iOS 26 ou plus récent (WebGPU).</span>
 
     <button class="iconbtn wide" id="cfgLink" type="button">Copier mon lien de connexion (clés incluses)</button>
+    <button class="iconbtn wide" id="cfgPaste" type="button">Coller mon lien de connexion</button>
+    <button class="iconbtn wide" id="cfgInstall" type="button">Préparer l'icône d'écran d'accueil avec mes clés</button>
     <span class="note" style="display:block;padding-block:6px">Ce lien remet tes clés automatiquement, dans Safari, l'app de l'écran d'accueil ou le raccourci « Dis Jarvis ». Mets-le dans ton raccourci à la place de l'adresse actuelle. Il contient tes clés : ne l'envoie à personne. Les clés ne passent jamais par GitHub (elles sont après le #).</span>
 
     <h3>Voix et conversation</h3>
@@ -310,20 +312,22 @@ textarea::placeholder{color:var(--ink-3)}
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
   // keys carried in the link (#cfg=…, never sent to the server): restores them in any Safari context
-  (() => {
-    const m = /[#&]cfg=([A-Za-z0-9_-]+)/.exec(location.hash);
-    if(!m) return;
+  function importKeys(str){
+    const m = /cfg=([A-Za-z0-9_-]+)/.exec(String(str || ""));
+    if(!m) return false;
     try{
       const b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
       const pack = JSON.parse(decodeURIComponent(escape(atob(b64 + "===".slice((b64.length + 3) % 4)))));
       if(pack.c) cfg.claudeKey = pack.c;
       if(pack.d) cfg.dsKey = pack.d;
-      if(pack.e){ cfg.elKey = pack.e; }
+      if(pack.e) cfg.elKey = pack.e;
       if(pack.b) cfg.dsBase = pack.b;
-      saveCfg();
-    }catch{}
-    history.replaceState(null, "", location.pathname + location.search);   // keys leave the address bar
-  })();
+      saveCfg(); return !!(pack.c || pack.d || pack.e);
+    }catch{ return false; }
+  }
+  // "keep" = install mode: the keys stay in the address so the home-screen icon is created with them
+  // and puts them back at every launch (a deleted then re-added icon starts with empty storage)
+  if(importKeys(location.hash) && !/[#&]keep\b/.test(location.hash)) history.replaceState(null, "", location.pathname + location.search);
   try{ navigator.storage?.persist?.(); }catch{}   // ask Safari not to clear Jarvis' data
   let memories = store.get("mem", []);
   const MEM_MAX = 150;
@@ -1422,11 +1426,29 @@ textarea::placeholder{color:var(--ink-3)}
     $(f).addEventListener("change", save);
     if($(f).tagName === "INPUT") $(f).addEventListener("input", save);
   });
-  $("cfgLink").onclick = () => {
+  $("cfgPaste").onclick = async () => {
+    let txt = "";
+    try{ txt = await Promise.race([navigator.clipboard.readText(), new Promise((_, ko) => setTimeout(ko, 15000))]); }catch{}
+    if(!/cfg=/.test(txt)) txt = prompt("Colle ici ton lien de connexion :") || "";
+    if(importKeys(txt)){ $("setBtn").click(); addMsg("sys", "Clés importées ✓"); }
+    else if(txt) addMsg("sys", "Ce n'est pas un lien de connexion Jarvis. Dans Safari : ⚙︎ › Copier mon lien de connexion.");
+  };
+  $("cfgInstall").onclick = () => {
+    const link = keysLink(); if(!link) return;
+    const sameSearch = location.search === "?ecoute";   // otherwise the page reloads and the boot shows the hint
+    location.replace(link + "&keep");
+    $("sheet").hidden = true;
+    if(sameSearch) addMsg("sys", INSTALL_MSG);
+  };
+  const INSTALL_MSG = "Maintenant : touche Partager › Sur l'écran d'accueil › Ajouter. L'icône gardera tes clés, même si tu la supprimes puis la réinstalles de la même façon.";
+  function keysLink(){
     const pack = { c: cfg.claudeKey.trim(), d: cfg.dsKey.trim(), e: cfg.elKey.trim(), ...(cfg.dsBase && cfg.dsBase !== "https://api.deepseek.com" ? { b: cfg.dsBase } : {}) };
-    if(!pack.c && !pack.d && !pack.e){ addMsg("sys", "Colle d'abord au moins une clé."); return; }
+    if(!pack.c && !pack.d && !pack.e){ addMsg("sys", "Colle d'abord au moins une clé."); return ""; }
     const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(pack)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-    const url = location.origin + location.pathname + "?ecoute#cfg=" + b64;
+    return location.origin + location.pathname + "?ecoute#cfg=" + b64;
+  }
+  $("cfgLink").onclick = () => {
+    const url = keysLink(); if(!url) return;
     const b = $("cfgLink");
     navigator.clipboard?.writeText(url).then(() => { b.textContent = "Lien copié ✓ — colle-le dans ton raccourci"; setTimeout(() => b.textContent = "Copier mon lien de connexion (clés incluses)", 4000); },
       () => { prompt("Copie ce lien :", url); });
@@ -1492,7 +1514,7 @@ textarea::placeholder{color:var(--ink-3)}
   // ================= boot =================
   turns.forEach(t => addMsg(t.role === "user" ? "user" : "bot", t.content, t.role === "user" ? {} : { who:"Jarvis" }));
   if(!turns.length){
-    addMsg("bot", keyMissing() ? "Bonjour. Colle ta clé Claude ou DeepSeek dans les réglages, puis touche le micro pour parler." : "Prêt. Touche le micro pour parler.", { plain:true });
+    addMsg("bot", keyMissing() ? "Bonjour. Colle ta clé Claude ou DeepSeek dans les réglages, ou, si tu as ton lien de connexion, touche Réglages › Coller mon lien de connexion." : "Prêt. Touche le micro pour parler.", { plain:true });
   }
   (store.get("timers", []) || []).forEach(t => { timers.push({ ...t }); });
   timers.forEach(t => { if(!t.done){ if(t.end > Date.now()){ schedule(t); keepAwake(true); } else fireTimer(t.id); } });
@@ -1508,6 +1530,7 @@ textarea::placeholder{color:var(--ink-3)}
   if(location.protocol !== "file:") setTimeout(autoListen, 400);
   document.addEventListener("visibilitychange", () => { if(!document.hidden) setTimeout(autoListen, 400); });
   if("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
+  if(/[#&]keep\b/.test(location.hash) && !navigator.standalone && !matchMedia("(display-mode: standalone)").matches) addMsg("sys", INSTALL_MSG);
   if(location.protocol === "file:") addMsg("sys", "Ouvre cette page depuis une adresse https (GitHub Pages) : Safari bloque le micro et les appels réseau sur un fichier local.");
 })();
 </script>
