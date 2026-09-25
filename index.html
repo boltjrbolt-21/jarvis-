@@ -383,7 +383,7 @@ textarea::placeholder{color:var(--ink-3)}
         if(!el.dataset.jid || !rate(el.dataset.jid, -1)) return;
         down.textContent = "👎 noté";
         const q = questionFor(el);
-        if(q && expertOn(cfg.provider === "deepseek" ? "deepseek" : "claude") && !el.querySelector(".redo")){
+        if(q && expertAvailable() && !el.querySelector(".redo")){
           let box = el.querySelector(".actions"); if(!box){ box = document.createElement("div"); box.className = "actions"; el.append(box); }
           const redo = document.createElement("button"); redo.type = "button"; redo.className = "action redo"; redo.textContent = "Redemander à l'expert";
           redo.onclick = () => { if(busy) return; redo.remove(); forceExpertOnce = true; send(q); };
@@ -851,7 +851,8 @@ textarea::placeholder{color:var(--ink-3)}
   const WEB_SERVER_TOOL = { type:"web_search_20250305", name:"web_search", max_uses:3, user_location:{ type:"approximate", city:"Dijon", region:"Bourgogne-Franche-Comté", country:"FR", timezone:"Europe/Paris" } };
 
   // ---- Expert agent: the fast model hands hard questions to a stronger Claude, then condenses the answer ----
-  const expertOn = front => cfg.expert && cfg.expert !== "none" && !!cfg.claudeKey.trim() && !(front === "claude" && cfg.claudeModel === cfg.expert);
+  const expertAvailable = () => cfg.expert && cfg.expert !== "none" && !!cfg.claudeKey.trim();
+  const expertOn = front => expertAvailable() && !(front === "claude" && cfg.claudeModel === cfg.expert);
   const expertName = () => /opus/.test(cfg.expert) ? "Opus" : "Sonnet";
   const EXPERT_TOOL = { name:"ask_expert",
     description:"Consulte un modèle bien plus puissant pour une question difficile : santé, médicaments, posologies, pharmacologie, raisonnement complexe, calcul délicat, conseil important, texte long. Donne la question complète avec le contexte utile. Il répond en détail ; tu résumes ensuite pour l'oral. Pas pour les questions simples ni la conversation courante.",
@@ -1094,7 +1095,7 @@ textarea::placeholder{color:var(--ink-3)}
   let lessons = store.get("lessons", "");
   const learn = Object.assign({ rated: 0, count: 0, lastAt: 0 }, store.get("learn", {}));
   let forceExpertOnce = false, reflecting = false;
-  const REFLECT_EVERY = 6;
+  const REFLECT_EVERY = 6, REFLECT_COOLDOWN_MS = 60000;
   const saveLearn = () => { store.set("journal", journal.slice(-60)); store.set("learn", learn); };
   function logExchange(q, a, by, expert, ms){
     const e = { id: Date.now().toString(36) + Math.random().toString(36).slice(2,5), t: Date.now(), q: String(q).slice(0,240), a: String(a).slice(0,360), by, expert, ms: Math.round(ms), fb: 0 };
@@ -1104,15 +1105,28 @@ textarea::placeholder{color:var(--ink-3)}
     const e = journal.find(x => x.id === id); if(!e || e.fb === fb) return false;
     if(!e.fb) learn.rated++;
     e.fb = fb; saveLearn();
-    if(learn.rated >= REFLECT_EVERY && cfg.claudeKey.trim() && navigator.onLine !== false) reflect(false);
+    if(learn.rated >= REFLECT_EVERY && cfg.claudeKey.trim() && navigator.onLine !== false) void reflect(false);
     return true;
   }
   const CORRECTION_RE = /^(non\b|faux\b|c'est faux|tu te trompes|tu t'es trompé|n'importe quoi|mauvaise réponse|c'est pas ça|ce n'est pas ça|pas du tout)/i;
+  function setReflectingUI(active){
+    const b = $("reflectNow");
+    if(!b) return;
+    b.disabled = active;
+    b.textContent = active ? "Analyse en cours…" : "Améliorer maintenant";
+  }
   async function reflect(manual){
-    if(reflecting) return;
-    if(!cfg.claudeKey.trim()){ if(manual) addMsg("sys", "L'apprentissage a besoin de la clé Claude."); return; }
-    if(journal.filter(e => e.fb).length < 3){ if(manual) addMsg("sys", "Pas encore assez d'avis : note au moins 3 réponses avec 👍 ou 👎."); return; }
+    if(reflecting){ if(manual) addMsg("sys", "Un bilan d'apprentissage est déjà en cours."); return false; }
+    if(manual && !learn.rated && learn.lastAt && Date.now() - learn.lastAt < REFLECT_COOLDOWN_MS){
+      addMsg("sys", "Le bilan d'apprentissage est déjà à jour.");
+      renderDiag();
+      return false;
+    }
+    if(!cfg.claudeKey.trim()){ if(manual) addMsg("sys", "L'apprentissage a besoin de la clé Claude."); return false; }
+    if(journal.filter(e => e.fb).length < 3){ if(manual) addMsg("sys", "Pas encore assez d'avis : note au moins 3 réponses avec 👍 ou 👎."); return false; }
+    const ratedAtStart = learn.rated;
     reflecting = true;
+    setReflectingUI(true);
     try{
       const lines = journal.slice(-40).map(e => `[${e.fb > 0 ? "👍" : e.fb < 0 ? "👎" : "·"}] ${e.by}${e.expert ? " + expert" : ""}, ${(e.ms/1000).toFixed(1)} s | Q : ${e.q} | R : ${e.a}`).join("\n");
       const prompt = `Tu améliores Jarvis, un assistant vocal qui fonctionne en équipe : un modèle rapide (${cfg.claudeModel}) répond et peut consulter un expert (${cfg.expert}) pour les questions difficiles ; DeepSeek sert de secours et un petit modèle local fonctionne hors ligne.\n\nJournal récent (👍 réponse appréciée, 👎 réponse jugée mauvaise, · sans avis) :\n${lines}\n\nRègles actuelles :\n${lessons || "(aucune)"}\n\nÉcris les nouvelles règles de l'équipe : au plus 10 lignes courtes et concrètes, une règle par ligne, à l'impératif, adressées au modèle rapide, sans titre, sans numéro ni puce. Couvre : les types de questions où il doit consulter l'expert (là où il a eu des 👎 seul), ceux où il doit s'en passer (questions simples : rapidité et coût), et la façon de répondre que Kévin préfère. Garde les règles actuelles qui restent valables, retire celles que le journal contredit.`;
@@ -1120,11 +1134,13 @@ textarea::placeholder{color:var(--ink-3)}
       const rules = out.split(/\n+/).map(l => l.replace(/^\s*(?:[-•*·–—]|\d+[.)])\s*/, "").replace(/\*\*/g, "").trim()).filter(l => l.length > 8 && !/:\s*$/.test(l)).slice(0, 10);
       if(!rules.length) throw new Error("réponse vide");
       lessons = rules.join("\n").slice(0, 1600); store.set("lessons", lessons);
-      learn.rated = 0; learn.count++; learn.lastAt = Date.now(); saveLearn();
+      learn.rated = Math.max(0, learn.rated - ratedAtStart); learn.count++; learn.lastAt = Date.now(); saveLearn();
       if(!$("sheet").hidden) $("lessons").value = lessons;
+      renderDiag();
       addMsg("sys", `Jarvis s'est amélioré : ${rules.length} règles d'équipe mises à jour (voir Réglages › Apprentissage).`);
-    }catch(e){ if(manual) addMsg("sys", "Amélioration impossible : " + e.message); }
-    finally{ reflecting = false; }
+      return true;
+    }catch(e){ if(manual) addMsg("sys", "Amélioration impossible : " + e.message); return false; }
+    finally{ reflecting = false; setReflectingUI(false); if(!$("sheet").hidden) renderDiag(); }
   }
 
   // ================= send =================
@@ -1159,17 +1175,22 @@ textarea::placeholder{color:var(--ink-3)}
     const missing = keyMissing();
     if(missing){ addMsg("sys", missing); $("setBtn").click(); return; }
     stopSpeaking(); stopListening();
+    const displayedText = text;
+    let requestText = text;
     // "non, c'est faux" right after an answer counts as a 👎 and sends the next answer through the expert
     const prevJ = journal[journal.length-1];
     if(CORRECTION_RE.test(text.trim()) && prevJ && !prevJ.fb && Date.now() - prevJ.t < 10*60000){
       rate(prevJ.id, -1);
       const prevEl = [...log.querySelectorAll(".msg.bot")].find(m => m.dataset.jid === prevJ.id);
       prevEl?.querySelectorAll(".mactions button").forEach(b => { if(b.textContent === "👎") b.textContent = "👎 noté"; });
-      forceExpertOnce = true;
+      if(expertAvailable()){
+        forceExpertOnce = true;
+        requestText = prevJ.q;
+      }else addMsg("sys", "Correction notée. Ajoute une clé Claude et choisis Sonnet ou Opus pour obtenir la correction de l'expert.");
     }
     const img = pendingImg; clearImg();
-    addMsg("user", text, { img: img ? URL.createObjectURL(img) : null });
-    turns.push({ role:"user", content: text + (img ? " [photo jointe]" : "") });
+    addMsg("user", displayedText, { img: img ? URL.createObjectURL(img) : null });
+    turns.push({ role:"user", content: requestText + (img ? " [photo jointe]" : "") });
     turns = turns.slice(-30); while(turns.length && turns[0].role !== "user") turns.shift();
     saveTurns();
 
@@ -1181,7 +1202,8 @@ textarea::placeholder{color:var(--ink-3)}
       else { addMsg("sys", "DeepSeek ne lit pas les photos ici. Ajoute une clé Claude pour ça."); }
     }
 
-    currentMsg = addMsg("bot", "…", { cls:"thinking", who: "Jarvis · " + PROV_LABEL[provider] });
+    const forcedExpert = forceExpertOnce && expertAvailable();
+    currentMsg = addMsg("bot", "…", { cls:"thinking", who: forcedExpert ? "Jarvis · Expert " + expertName() : "Jarvis · " + PROV_LABEL[provider] });
     const txt = currentMsg.querySelector(".txt");
     toolLog = []; setBusy(true); setMode("thinking", "Réflexion…");
     ctl = new AbortController();
@@ -1199,11 +1221,23 @@ textarea::placeholder{color:var(--ink-3)}
     let usedBy = provider;
     try{
       let out;
-      if(provider === "auto"){
+      if(forcedExpert){
+        toolLog.push("expert " + expertName());
+        setMode("thinking", "Correction par l'expert " + expertName() + "…");
+        out = await askExpert(requestText, ctl.signal, [
+          "Tu es l'expert de correction de Jarvis. Réponds directement à la question en français, de façon exacte, autonome et concise.",
+          STYLES[cfg.persona],
+          lessons ? "Règles apprises à respecter :\n" + lessons : "",
+          memories.length ? "Contexte utile sur Kévin : " + memories.slice(-30).join(" ; ") : ""
+        ].filter(Boolean).join("\n"));
+        usedBy = "claude";
+        onText(out);
+        currentMsg.querySelector(".who").textContent = "Jarvis · Expert " + expertName();
+      }else if(provider === "auto"){
         const claudeHistory = history.slice();
         if(img){
           const b = await fileToB64(img);
-          claudeHistory[claudeHistory.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text } ] };
+          claudeHistory[claudeHistory.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text:requestText } ] };
         }
         const r = await runAuto(history, claudeHistory, onText, ctl.signal, !!img);
         out = r.out; usedBy = r.by;
@@ -1211,7 +1245,7 @@ textarea::placeholder{color:var(--ink-3)}
       }else if(provider === "claude"){
         if(img){
           const b = await fileToB64(img);
-          history[history.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text } ] };
+          history[history.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text:requestText } ] };
         }
         out = await runClaude(history, onText, ctl.signal);
       }else if(provider === "local"){
@@ -1222,9 +1256,11 @@ textarea::placeholder{color:var(--ink-3)}
       out = (out || "").trim() || "Pas de réponse.";
       txt.textContent = out;
       turns.push({ role:"assistant", content: out }); saveTurns();
-      currentMsg.dataset.jid = logExchange(text, out, usedBy, toolLog.some(x => x.startsWith("expert")), performance.now() - t0);
+      const usedExpert = toolLog.some(x => x.startsWith("expert"));
+      if(usedExpert && !forcedExpert) currentMsg.querySelector(".who").textContent = "Jarvis · " + PROV_LABEL[usedBy] + " + expert " + expertName();
+      currentMsg.dataset.jid = logExchange(requestText, out, usedBy, usedExpert, performance.now() - t0);
       forceExpertOnce = false;
-      diag.modèle = (usedBy === "claude" ? cfg.claudeModel : usedBy === "local" ? (llmId || cfg.localModel) : cfg.dsModel) + (provider === "auto" ? " (auto)" : "") + " · OK";
+      diag.modèle = (usedExpert ? cfg.expert : usedBy === "claude" ? cfg.claudeModel : usedBy === "local" ? (llmId || cfg.localModel) : cfg.dsModel) + (provider === "auto" && !forcedExpert ? " (auto)" : "") + " · OK";
       diag.dernier = `${new Date().toLocaleTimeString("fr-FR")} · ${((performance.now()-t0)/1000).toFixed(1)} s`;
       if(toolLog.length){ const d = document.createElement("div"); d.className = "tools"; d.textContent = "↳ " + [...new Set(toolLog)].join(" · "); currentMsg.append(d); }
       setBusy(false);
@@ -1333,8 +1369,8 @@ textarea::placeholder{color:var(--ink-3)}
     addMsg("sys", facts.length ? `${facts.length} fait${facts.length > 1 ? "s" : ""} importé${facts.length > 1 ? "s" : ""} dans la mémoire de Jarvis.` : "Rien à importer : colle la réponse de Claude, un fait par ligne.");
   };
   $("lessons").addEventListener("change", e => { lessons = e.target.value.trim().slice(0, 1600); store.set("lessons", lessons); });
-  $("reflectNow").onclick = async () => { const b = $("reflectNow"); b.disabled = true; b.textContent = "Analyse en cours…"; await reflect(true); b.disabled = false; b.textContent = "Améliorer maintenant"; };
-  $("learnReset").onclick = () => { journal = []; lessons = ""; learn.rated = 0; learn.count = 0; saveLearn(); store.set("lessons", ""); $("lessons").value = ""; renderDiag(); addMsg("sys", "Apprentissage réinitialisé."); };
+  $("reflectNow").onclick = () => { void reflect(true); };
+  $("learnReset").onclick = () => { journal = []; lessons = ""; learn.rated = 0; learn.count = 0; learn.lastAt = 0; saveLearn(); store.set("lessons", ""); $("lessons").value = ""; renderDiag(); addMsg("sys", "Apprentissage réinitialisé."); };
   $("clearChat").onclick = () => { turns = []; saveTurns(); log.innerHTML = ""; addMsg("sys", "Conversation effacée. Mémoire et notes conservées."); $("sheet").hidden = true; };
   $("closeSheet").onclick = () => { $("sheet").hidden = true; };
   $("sheet").onclick = e => { if(e.target.id === "sheet") $("sheet").hidden = true; };
