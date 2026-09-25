@@ -66,6 +66,9 @@ canvas#orb{width:76px;height:76px;flex:none;cursor:pointer}
 .action{display:inline-flex;align-items:center;gap:6px;text-decoration:none;color:var(--ground);background:var(--arc);font:600 13px var(--body);padding:7px 12px;border-radius:10px}
 .raw{font:12px var(--mono);color:var(--ink-3);user-select:all;align-self:center}
 .tools{font:11px var(--mono);color:var(--ink-3);margin-top:4px}
+.refs{margin-top:8px;padding-top:6px;border-top:1px solid var(--line);font-size:12px;line-height:1.4;white-space:normal}
+.refs b{display:block;font:600 11px var(--mono);color:var(--ink-3);letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+.refs a{display:block;color:var(--arc);text-decoration:none;margin-bottom:4px}
 .sugg{display:flex;gap:8px;overflow-x:auto;padding-bottom:8px;scrollbar-width:none}
 .sugg::-webkit-scrollbar{display:none}
 .sugg button{flex:none;appearance:none;border:1px solid var(--line);background:transparent;color:var(--ink-2);border-radius:999px;padding:6px 12px;font:13px var(--body);cursor:pointer;white-space:nowrap}
@@ -203,6 +206,14 @@ textarea::placeholder{color:var(--ink-3)}
       </select>
     </label>
     <span class="note" style="display:block;padding-block:6px">Pour les questions difficiles (santé, médicaments, raisonnement), le modèle rapide consulte l'expert puis te résume sa réponse. Utilise la clé Claude.</span>
+    <label>Mode Pharma
+      <select id="pharma">
+        <option value="auto">Automatique (dès qu'il faut de la rigueur)</option>
+        <option value="on">Toujours</option>
+        <option value="off">Jamais</option>
+      </select>
+    </label>
+    <span class="note" style="display:block;padding-block:6px">Médicaments, doses, pathologies, pharmacologie : l'expert répond lui-même, avec une méthode rigoureuse et des articles PubMed cités sous la réponse. À la voix : « active / désactive le mode pharma ».</span>
     <label>Recherche web
       <select id="webSel"><option value="1">Activée</option><option value="0">Désactivée</option></select>
     </label>
@@ -304,7 +315,7 @@ textarea::placeholder{color:var(--ink-3)}
 
   // ================= state =================
   const cfg = Object.assign({
-    provider: "auto", expert: "claude-sonnet-5", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
+    provider: "auto", expert: "claude-sonnet-5", pharma: "auto", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
     web: true, persona: "concis", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
     localModel: "Qwen2.5-1.5B-Instruct",
@@ -921,6 +932,7 @@ textarea::placeholder{color:var(--ink-3)}
       webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
       "Si l'utilisateur veut continuer, approfondir ou envoyer quelque chose dans Claude ou claude.ai, utilise show_link avec kind « claude ».",
       lessons ? "Règles d'équipe apprises de tes échanges avec Kévin, à appliquer :\n" + lessons : "",
+      pharmaTurn ? "Mode Pharma : cette question demande de la rigueur. Appuie-toi sur search_pubmed, donne une réponse exacte et structurée en 4 à 6 phrases (mécanisme, indications, posologie avec unités, effets indésirables, contre-indications et interactions selon le cas), et dis de vérifier dans le RCP ou le Vidal quand c'est critique." : "",
       expert && forceExpertOnce ? "Kévin a jugé ta réponse précédente insuffisante : pour cette question, consulte obligatoirement ask_expert avant de répondre." : "",
       expert ? "Tu travailles avec un expert plus puissant : pour une question difficile ou importante (santé, médicaments, raisonnement complexe), consulte ask_expert, puis donne sa réponse en l'abrégeant pour l'oral, sans dire que tu l'as consulté sauf si on te le demande." : "",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
@@ -956,6 +968,49 @@ textarea::placeholder{color:var(--ink-3)}
   const WEB_SERVER_TOOL = { type:"web_search_20250305", name:"web_search", max_uses:3, user_location:{ type:"approximate", city:"Dijon", region:"Bourgogne-Franche-Comté", country:"FR", timezone:"Europe/Paris" } };
 
   // ---- Expert agent: the fast model hands hard questions to a stronger Claude, then condenses the answer ----
+  // ---- PubMed (NCBI E-utilities, public, no key) ----
+  const EUTILS = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/";
+  let pubmedRefs = [];
+  async function searchPubmed(query, signal, n = 5){
+    const get = async (url, as) => { let r; try{ r = await fetch(url, { signal }); }catch(e){ if(e.name === "AbortError") throw e; throw new Error("PubMed injoignable"); } if(!r.ok) throw new Error("PubMed : erreur " + r.status); return as === "text" ? r.text() : r.json(); };
+    const s = await get(`${EUTILS}esearch.fcgi?db=pubmed&retmode=json&sort=relevance&tool=jarvis&retmax=${n}&term=${encodeURIComponent(query)}`);
+    const ids = s.esearchresult?.idlist || [];
+    if(!ids.length) return { resultats: [], conseil: "Aucun article : reformule en anglais, avec des termes MeSH plus simples." };
+    const sum = await get(`${EUTILS}esummary.fcgi?db=pubmed&retmode=json&tool=jarvis&id=${ids.join(",")}`);
+    const abs = await get(`${EUTILS}efetch.fcgi?db=pubmed&rettype=abstract&retmode=text&tool=jarvis&id=${ids.slice(0,3).join(",")}`, "text").catch(() => "");
+    const items = ids.map(id => { const d = sum.result?.[id] || {}; return { pmid: id, titre: d.title || "", revue: d.fulljournalname || d.source || "", annee: (d.pubdate || "").slice(0,4), auteurs: (d.authors || []).slice(0,3).map(a => a.name).join(", "), type: (d.pubtype || []).join(", ") }; });
+    items.forEach(it => { if(!pubmedRefs.some(r => r.pmid === it.pmid)) pubmedRefs.push(it); });
+    toolLog.push("PubMed");
+    return { resultats: items, resumes_des_3_premiers: abs.slice(0, 7000) };
+  }
+  const PUBMED_TOOL = { name:"search_pubmed",
+    description:"Cherche des articles scientifiques et médicaux dans PubMed. Requête en anglais, avec des termes MeSH (ex. « amoxicillin pharmacokinetics children »). Renvoie titres, revues, années, PMID et les résumés des 3 premiers. Pour appuyer une réponse de santé ou de pharmacologie, ou quand on demande des sources.",
+    parameters: obj({ query:{type:"string", description:"Requête PubMed en anglais"} }, ["query"]),
+    run: async (i, signal) => { setMode("thinking", "Recherche dans PubMed…"); return await searchPubmed(String(i.query || "").slice(0, 300), signal); } };
+  function showRefs(msgEl, answer){
+    if(!pubmedRefs.length) return;
+    const cited = [...String(answer).matchAll(/PMID\s*:?\s*(\d{5,9})/gi)].map(m => m[1]);
+    const list = (cited.length ? pubmedRefs.filter(r => cited.includes(r.pmid)) : pubmedRefs.slice(0, 3)).slice(0, 6);
+    if(!list.length) return;
+    const box = document.createElement("div"); box.className = "refs";
+    const h = document.createElement("b"); h.textContent = "Sources PubMed"; box.append(h);
+    list.forEach(r => { const a = document.createElement("a"); a.href = "https://pubmed.ncbi.nlm.nih.gov/" + r.pmid + "/"; a.target = "_blank"; a.rel = "noopener"; a.textContent = `${r.titre} — ${r.revue}${r.annee ? ", " + r.annee : ""}`; box.append(a); });
+    msgEl.append(box); scroll();
+  }
+
+  // ---- Pharma mode: questions that need rigour go straight to the expert, with PubMed ----
+  const ACC = "\\wÀ-ÿ";
+  const PHARMA_RE = new RegExp(`(?<![${ACC}])(m[ée]dicaments?|traitements?|th[ée]rapeutiques?|posologies?|doses?|dosages?|mg|µg|mcg|comprim[ée]s?|g[ée]lules?|injections?|perfusions?|effets? (?:ind[ée]sirables?|secondaires?)|interactions?|contre[- ]indications?|pharmaco[${ACC}]*|pharmacie|officine|ordonnances?|prescri[${ACC}]*|antibio[${ACC}]*|antalgiques?|anti[- ]?inflammatoires?|antiviraux|antifongiques?|vaccins?|m[ée]canisme d'action|demi[- ]vie|clairance|biodisponibilit[ée]|pharmacocin[ée]tique|toxicit[ée]|surdosage|intoxication|grossesse|allaitement|pathologies?|maladies?|syndromes?|sympt[ôo]mes?|diagnostics?|infections?|cancers?|tumeurs?|diab[èe]te|hypertension|insuffisance [${ACC}]+|enzymes?|r[ée]cepteurs?|biochimie|physiologie|physiopathologie|h[ée]matologie|immunologie|microbiologie|bact[ée]ries?|virus|gal[ée]nique|RCP|Vidal|DCI|AMM|[${ACC}]+(?:cilline|mycine|cycline|oxacine|conazole|prazole|pril|sartan|olol|dipine|statine|mab|tinib|ciclovir|navir|tidine|parine|s[ée]mide|thiazide|z[ée]pam|zolam|triptan|coxib|prof[èe]ne|f[ée]nac|lukast|gliptine|flozine|glitazone|ca[ïi]ne|s[ée]tron|trexate|platine|rubicine))(?![${ACC}])`, "i");
+  let pharmaTurn = false;
+  const needsPharma = text => cfg.pharma === "on" || (cfg.pharma !== "off" && PHARMA_RE.test(text));
+  const PHARMA_EXPERT = [
+    "Tu es un expert en pharmacie et en pharmacologie, consulté par Jarvis pour Kévin, étudiant en pharmacie à Dijon. Exigence absolue : l'exactitude.",
+    "Quand une donnée factuelle, clinique ou chiffrée le justifie, utilise search_pubmed (requête en anglais, termes MeSH), appuie-toi sur les résumés et cite les articles utilisés sous la forme (PMID 12345678). N'invente jamais une référence.",
+    "Selon la question, couvre dans cet ordre ce qui est utile : classe et mécanisme d'action ; indications ; posologie usuelle adulte avec les unités, et adaptations (insuffisance rénale ou hépatique, enfant, sujet âgé, grossesse) ; effets indésirables principaux ; contre-indications et interactions majeures ; niveau de preuve.",
+    "Distingue ce qui est établi de ce qui est incertain. Quand une valeur dépend du produit ou du patient, dis de vérifier dans le RCP ou le Vidal. Pour un calcul, écris la formule en LaTeX entre $…$ avec les unités et donne les étapes.",
+    "Ta réponse est affichée et lue à voix haute : français parlé mais précis, 4 à 8 phrases, sans markdown ni listes à puces ; commence chaque point par son intitulé (« Mécanisme : … »). Les PMID restent entre parenthèses en fin de phrase."
+  ].join("\n");
+
   const expertAvailable = () => cfg.expert && cfg.expert !== "none" && !!cfg.claudeKey.trim();
   const expertOn = front => expertAvailable() && !(front === "claude" && cfg.claudeModel === cfg.expert);
   const expertName = () => /opus/.test(cfg.expert) ? "Opus" : "Sonnet";
@@ -963,7 +1018,8 @@ textarea::placeholder{color:var(--ink-3)}
     description:"Consulte un modèle bien plus puissant pour une question difficile : santé, médicaments, posologies, pharmacologie, raisonnement complexe, calcul délicat, conseil important, texte long. Donne la question complète avec le contexte utile. Il répond en détail ; tu résumes ensuite pour l'oral. Pas pour les questions simples ni la conversation courante.",
     parameters: obj({ question:{type:"string", description:"La question complète, avec le contexte"} }, ["question"]),
     run: async (i, signal) => { toolLog.push("expert " + expertName()); setMode("thinking", "Consultation de l'expert " + expertName() + "…"); return await askExpert(String(i.question || ""), signal); } };
-  async function askExpert(question, signal, systemOverride){
+  async function askExpert(question, signal, systemOverride, opts = {}){
+    if(opts.pharma) return await askExpertPharma(question, signal, opts.history);
     let resp;
     try{
       resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", signal, headers: claudeHeaders(),
@@ -978,10 +1034,45 @@ textarea::placeholder{color:var(--ink-3)}
     return text || "L'expert n'a pas donné de réponse.";
   }
 
+  // expert with its own tool loop (PubMed); follows the recent conversation for follow-up questions
+  async function askExpertPharma(question, signal, history){
+    const model = expertAvailable() ? cfg.expert : cfg.claudeModel;
+    const prior = (history || []).slice(-9, -1).filter(m => typeof m.content === "string");
+    while(prior.length && prior[0].role !== "user") prior.shift();
+    const messages = [...prior, { role:"user", content: question }];
+    const system = PHARMA_EXPERT + (lessons ? "\nRègles apprises : " + lessons.split("\n").join(" ") : "") + (memories.length ? "\nContexte sur Kévin : " + memories.slice(-20).join(" ; ") : "");
+    const tools = [{ name: PUBMED_TOOL.name, description: PUBMED_TOOL.description, input_schema: PUBMED_TOOL.parameters }];
+    for(let round = 0; round < 5; round++){
+      let resp;
+      try{
+        resp = await fetch("https://api.anthropic.com/v1/messages", { method:"POST", signal, headers: claudeHeaders(),
+          body: JSON.stringify({ model, max_tokens: 4000, system, messages, tools }) });
+      }catch(err){ throw netError("Claude", err); }
+      if(!resp.ok) throw await apiError(resp, "Expert");
+      const j = await resp.json();
+      if(j.stop_reason === "refusal") return "L'expert a refusé de répondre à cette question.";
+      if(j.stop_reason === "tool_use"){
+        messages.push({ role:"assistant", content: j.content });
+        const results = [];
+        for(const b of j.content.filter(b => b.type === "tool_use")){
+          const r = await runTool([PUBMED_TOOL], b.name, b.input, signal);
+          results.push({ type:"tool_result", tool_use_id: b.id, content: r.text, is_error: r.error });
+        }
+        messages.push({ role:"user", content: results });
+        setMode("thinking", "Analyse des articles…");
+        continue;
+      }
+      if(j.stop_reason === "pause_turn"){ messages.push({ role:"assistant", content: j.content }); continue; }
+      const text = (j.content || []).filter(b => b.type === "text").map(b => b.text).join("").trim();
+      return text || "L'expert n'a pas donné de réponse.";
+    }
+    return "L'expert n'a pas pu conclure : repose la question plus précisément.";
+  }
+
   // ---- Claude (streaming, local tools + Anthropic web search) ----
   async function runClaude(messages, onText, signal){
     const webOn = cfg.web;
-    const toolset = [...TOOLS, ...(expertOn("claude") ? [EXPERT_TOOL] : [])];
+    const toolset = [...TOOLS, PUBMED_TOOL, ...(expertOn("claude") ? [EXPERT_TOOL] : [])];
     const tools = toolset.map(t => ({ name:t.name, description:t.description, input_schema:t.parameters }));
     // newer models take the web search variant with dynamic filtering; Haiku keeps the basic one
     if(webOn) tools.push(/haiku/.test(cfg.claudeModel) ? WEB_SERVER_TOOL : { ...WEB_SERVER_TOOL, type:"web_search_20260209" });
@@ -1051,7 +1142,7 @@ textarea::placeholder{color:var(--ink-3)}
   let dsThinkingParam = true;
   async function runDeepSeek(history, onText, signal){
     const webOn = cfg.web && !!cfg.claudeKey.trim();
-    const tools = [...TOOLS, ...(webOn ? [WEB_TOOL] : []), ...(expertOn("deepseek") ? [EXPERT_TOOL] : [])];
+    const tools = [...TOOLS, PUBMED_TOOL, ...(webOn ? [WEB_TOOL] : []), ...(expertOn("deepseek") ? [EXPERT_TOOL] : [])];
     const messages = [{ role:"system", content: systemPrompt(webOn, expertOn("deepseek")) }, ...history];
     const base = (cfg.dsBase || "https://api.deepseek.com").replace(/\/+$/,"");
     let full = "";
@@ -1293,6 +1384,14 @@ textarea::placeholder{color:var(--ink-3)}
         requestText = prevJ.q;
       }else addMsg("sys", "Correction notée. Ajoute une clé Claude et choisis Sonnet ou Opus pour obtenir la correction de l'expert.");
     }
+    // voice/text switch: "active / désactive le mode pharma"
+    const pm = /(activ|allum|d[ée]sactiv|coup|arr[êe]t|[ée]tein)\w*\s+(?:le\s+)?mode\s+pharma(?:\s+(automatique|auto))?/i.exec(text);
+    if(pm && text.trim().split(/\s+/).length <= 7){
+      cfg.pharma = pm[2] ? "auto" : /^(activ|allum)/i.test(pm[1]) ? "on" : "off"; saveCfg();
+      addMsg("user", displayedText);
+      const msg = { on:"Mode pharma activé : toutes tes questions passent par l'expert, avec PubMed.", off:"Mode pharma désactivé.", auto:"Mode pharma automatique : il se lance dès qu'une question demande de la rigueur." }[cfg.pharma];
+      addMsg("bot", msg, { plain:true }); speak(msg); return;
+    }
     const img = pendingImg; clearImg();
     addMsg("user", displayedText, { img: img ? URL.createObjectURL(img) : null });
     turns.push({ role:"user", content: requestText + (img ? " [photo jointe]" : "") });
@@ -1308,6 +1407,9 @@ textarea::placeholder{color:var(--ink-3)}
     }
 
     const forcedExpert = forceExpertOnce && expertAvailable();
+    pharmaTurn = !img && needsPharma(requestText);
+    pubmedRefs = [];
+    const pharmaExpert = pharmaTurn && !forcedExpert && expertAvailable() && navigator.onLine !== false;
     currentMsg = addMsg("bot", "…", { cls:"thinking", who: forcedExpert ? "Jarvis · Expert " + expertName() : "Jarvis · " + PROV_LABEL[provider] });
     const txt = currentMsg.querySelector(".txt");
     toolLog = []; setBusy(true); setMode("thinking", "Réflexion…");
@@ -1326,10 +1428,18 @@ textarea::placeholder{color:var(--ink-3)}
     let usedBy = provider;
     try{
       let out;
-      if(forcedExpert){
+      if(pharmaExpert){
+        toolLog.push("mode pharma", "expert " + expertName());
+        currentMsg.querySelector(".who").textContent = "Jarvis · Pharma · " + expertName();
+        setMode("thinking", "Mode pharma : l'expert " + expertName() + " vérifie…");
+        out = await askExpert(requestText, ctl.signal, null, { pharma: true, history });
+        usedBy = "claude";
+        onText(out);
+      }else if(forcedExpert){
         toolLog.push("expert " + expertName());
         setMode("thinking", "Correction par l'expert " + expertName() + "…");
-        out = await askExpert(requestText, ctl.signal, [
+        if(pharmaTurn) out = await askExpert(requestText, ctl.signal, null, { pharma: true, history });
+        else out = await askExpert(requestText, ctl.signal, [
           "Tu es l'expert de correction de Jarvis. Réponds directement à la question en français, de façon exacte, autonome et concise.",
           STYLES[cfg.persona],
           lessons ? "Règles apprises à respecter :\n" + lessons : "",
@@ -1362,7 +1472,9 @@ textarea::placeholder{color:var(--ink-3)}
       txt.textContent = out; currentMsg.dataset.raw = out; renderMath(txt, out);
       turns.push({ role:"assistant", content: out }); saveTurns();
       const usedExpert = toolLog.some(x => x.startsWith("expert"));
-      if(usedExpert && !forcedExpert) currentMsg.querySelector(".who").textContent = "Jarvis · " + PROV_LABEL[usedBy] + " + expert " + expertName();
+      if(pharmaTurn && !pharmaExpert && !forcedExpert) toolLog.push("mode pharma");
+      showRefs(currentMsg, out);
+      if(usedExpert && !forcedExpert && !pharmaExpert) currentMsg.querySelector(".who").textContent = "Jarvis · " + PROV_LABEL[usedBy] + " + expert " + expertName();
       currentMsg.dataset.jid = logExchange(requestText, out, usedBy, usedExpert, performance.now() - t0);
       forceExpertOnce = false;
       diag.modèle = (usedExpert ? cfg.expert : usedBy === "claude" ? cfg.claudeModel : usedBy === "local" ? (llmId || cfg.localModel) : cfg.dsModel) + (provider === "auto" && !forcedExpert ? " (auto)" : "") + " · OK";
@@ -1396,7 +1508,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
