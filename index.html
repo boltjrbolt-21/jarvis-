@@ -110,6 +110,13 @@ textarea::placeholder{color:var(--ink-3)}
 .memlist li span:last-child{color:var(--ink-2);text-align:right}
 .empty{color:var(--ink-3);font-size:13px}
 .wide{margin-top:12px;width:100%}
+.cam{position:relative;margin-top:8px;border-radius:14px;overflow:hidden;background:#000;border:1px solid var(--line)}
+.cam video{display:block;width:100%;max-height:38vh;object-fit:cover}
+.camBar{position:absolute;left:0;right:0;bottom:8px;display:flex;justify-content:center;align-items:center;gap:18px}
+.camBar .iconbtn{background:rgba(12,19,28,.7)}
+.camHint{position:absolute;top:6px;left:10px;right:10px;font-size:11px;color:#fff;text-shadow:0 1px 3px #000}
+.cam.flash video{animation:flash .25s}
+@keyframes flash{from{filter:brightness(2.2)}to{filter:none}}
 @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
 </style>
 </head>
@@ -119,6 +126,9 @@ textarea::placeholder{color:var(--ink-3)}
     <div class="brand">Jarvis<small id="clock">—</small></div>
     <div class="hbtns">
       <button class="pill" id="provPill" type="button" aria-label="Changer de modèle">Claude</button>
+      <button class="iconbtn" id="camBtn" type="button" aria-pressed="false" aria-label="Caméra">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 10l5-3v10l-5-3z"/><rect x="3" y="6" width="12" height="12" rx="2.5"/></svg>
+      </button>
       <button class="iconbtn" id="voiceBtn" aria-pressed="true" aria-label="Réponses à voix haute">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path id="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>
       </button>
@@ -137,6 +147,16 @@ textarea::placeholder{color:var(--ink-3)}
       <div class="timers" id="timers"></div>
     </div>
   </section>
+
+  <div class="cam" id="cam" hidden>
+    <video id="camVideo" playsinline muted autoplay></video>
+    <div class="camHint">Caméra ouverte : Jarvis regarde l'image au moment où tu poses ta question.</div>
+    <div class="camBar">
+      <button class="iconbtn" id="camFlip" type="button" aria-label="Changer de caméra">⟲</button>
+      <button class="round send" id="camShot" type="button" aria-label="Analyser l'image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/></svg></button>
+      <button class="iconbtn" id="camClose" type="button" aria-label="Fermer la caméra">✕</button>
+    </div>
+  </div>
 
   <div class="log" id="log" role="log"></div>
 
@@ -361,7 +381,7 @@ textarea::placeholder{color:var(--ink-3)}
   let turns = store.get("turns", []);           // [{role, content(string)}]
   let timers = [];
   let busy = false, ctl = null, pendingImg = null, mode = "idle";
-  const diag = { modèle:"—", internet:"—", micro:"—", voix:"—", dernier:"aucun envoi" };
+  const diag = { modèle:"—", internet:"—", micro:"—", caméra:"—", voix:"—", dernier:"aucun envoi" };
 
   const fmtLeft = ms => { const s = Math.max(0, Math.round(ms/1000)); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
   const nowLong = () => new Date().toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});
@@ -1384,6 +1404,41 @@ textarea::placeholder{color:var(--ink-3)}
     finally{ reflecting = false; setReflectingUI(false); if(!$("sheet").hidden) renderDiag(); }
   }
 
+  // ================= camera (live preview, a frame is sent with each question) =================
+  let camStream = null, camFacing = "environment";
+  const camLive = () => !!camStream && camStream.getVideoTracks().some(t => t.readyState === "live");
+  async function openCamera(){
+    if(!navigator.mediaDevices?.getUserMedia){ addMsg("sys", "La caméra n'est pas disponible ici : ouvre Jarvis dans Safari."); return false; }
+    try{
+      camStream?.getTracks().forEach(t => t.stop());
+      camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: camFacing, width: { ideal: 1280 }, height: { ideal: 960 } }, audio: false });
+      const v = $("camVideo"); v.srcObject = camStream; await v.play().catch(() => {});
+      $("cam").hidden = false; $("camBtn").setAttribute("aria-pressed", "true"); diag.caméra = "OK";
+      return true;
+    }catch(e){
+      diag.caméra = "erreur : " + e.name; closeCamera();
+      addMsg("sys", e.name === "NotAllowedError" ? "Caméra refusée. Autorise-la : touche l'icône à gauche de l'adresse › Réglages du site web › Caméra › Autoriser." : "Caméra indisponible (" + (e.message || e.name) + ").");
+      return false;
+    }
+  }
+  function closeCamera(){
+    camStream?.getTracks().forEach(t => t.stop()); camStream = null;
+    $("camVideo").srcObject = null; $("cam").hidden = true; $("camBtn").setAttribute("aria-pressed", "false");
+  }
+  function grabFrame(){
+    const v = $("camVideo"); if(!v.videoWidth) return Promise.resolve(null);
+    const k = Math.min(1, 1568 / Math.max(v.videoWidth, v.videoHeight));
+    const c = document.createElement("canvas"); c.width = Math.round(v.videoWidth * k); c.height = Math.round(v.videoHeight * k);
+    c.getContext("2d").drawImage(v, 0, 0, c.width, c.height);
+    $("cam").classList.remove("flash"); void $("cam").offsetWidth; $("cam").classList.add("flash");
+    return new Promise(ok => c.toBlob(ok, "image/jpeg", .85));
+  }
+  $("camBtn").onclick = () => { if(camLive()) closeCamera(); else openCamera(); };
+  $("camClose").onclick = closeCamera;
+  $("camFlip").onclick = () => { camFacing = camFacing === "environment" ? "user" : "environment"; openCamera(); };
+  $("camShot").onclick = () => { if(busy) return; const v = input.value.trim(); input.value = ""; autosize(); send(v || "Qu'est-ce que tu vois ? Décris l'essentiel et dis-moi ce qui peut m'être utile."); };
+  document.addEventListener("visibilitychange", () => { if(document.hidden && camStream) closeCamera(); });   // privacy + battery
+
   // ================= send =================
   function autosize(){ input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 120) + "px"; }
   input.addEventListener("input", () => { autosize(); if(listening){ clearTimeout(silenceT); } });
@@ -1416,6 +1471,17 @@ textarea::placeholder{color:var(--ink-3)}
     const missing = keyMissing();
     if(missing){ addMsg("sys", missing); $("setBtn").click(); return; }
     stopSpeaking(); stopListening();
+    // "ouvre / ferme la caméra"
+    const cm = /^(?:jarvis[, ]+)?(ouvr|allum|activ|lanc|ferm|coup|[ée]tein|d[ée]sactiv|arr[êe]t)\w*\s+(?:la\s+)?cam[ée]ra\W*$/i.exec(text.trim());
+    if(cm && !opts.hidden){
+      addMsg("user", text);
+      const open = /^(ouvr|allum|activ|lanc)/i.test(cm[1]);
+      const ok = open ? await openCamera() : (closeCamera(), true);
+      const msg = open ? (ok ? "Caméra ouverte. Montre-moi et pose ta question." : "Je n'ai pas pu ouvrir la caméra : touche le bouton caméra en haut.") : "Caméra fermée.";
+      addMsg("bot", msg, { plain:true }); speak(msg); afterSpeech(); return;
+    }
+    // camera open = Jarvis looks: each question takes the current frame
+    if(camLive() && !pendingImg && !opts.hidden){ const f = await grabFrame(); if(f){ pendingImg = f; } }
     const displayedText = text;
     let requestText = text;
     // "non, c'est faux" right after an answer counts as a 👎 and sends the next answer through the expert
@@ -1552,7 +1618,7 @@ textarea::placeholder{color:var(--ink-3)}
     e.preventDefault();
     if(busy){ ctl?.abort(); return; }
     const v = input.value.trim();
-    if(!v && !pendingImg) return;
+    if(!v && !pendingImg && !camLive()) return;
     input.value = ""; autosize();
     send(v || "Qu'est-ce que tu vois sur cette photo ?");
   });
