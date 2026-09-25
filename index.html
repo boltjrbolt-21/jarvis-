@@ -218,6 +218,9 @@ textarea::placeholder{color:var(--ink-3)}
     <button class="iconbtn wide" id="localLoad" type="button">Télécharger et tester le modèle local</button>
     <span class="note" style="display:block;padding-block:6px">Tourne entièrement sur l'iPhone : rien n'est envoyé, aucune clé, aucun coût. À télécharger une fois (en Wi-Fi). Il comprend et parle moins bien que Claude, n'a pas accès à internet et ne gère que les minuteurs, la mémoire et les calculs simples. Demande iOS 26 ou plus récent (WebGPU).</span>
 
+    <button class="iconbtn wide" id="cfgLink" type="button">Copier mon lien de connexion (clés incluses)</button>
+    <span class="note" style="display:block;padding-block:6px">Ce lien remet tes clés automatiquement, dans Safari, l'app de l'écran d'accueil ou le raccourci « Dis Jarvis ». Mets-le dans ton raccourci à la place de l'adresse actuelle. Il contient tes clés : ne l'envoie à personne. Les clés ne passent jamais par GitHub (elles sont après le #).</span>
+
     <h3>Voix et conversation</h3>
     <label>Moteur de voix
       <select id="tts">
@@ -306,6 +309,22 @@ textarea::placeholder{color:var(--ink-3)}
     tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: ""
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
+  // keys carried in the link (#cfg=…, never sent to the server): restores them in any Safari context
+  (() => {
+    const m = /[#&]cfg=([A-Za-z0-9_-]+)/.exec(location.hash);
+    if(!m) return;
+    try{
+      const b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+      const pack = JSON.parse(decodeURIComponent(escape(atob(b64 + "===".slice((b64.length + 3) % 4)))));
+      if(pack.c) cfg.claudeKey = pack.c;
+      if(pack.d) cfg.dsKey = pack.d;
+      if(pack.e){ cfg.elKey = pack.e; }
+      if(pack.b) cfg.dsBase = pack.b;
+      saveCfg();
+    }catch{}
+    history.replaceState(null, "", location.pathname + location.search);   // keys leave the address bar
+  })();
+  try{ navigator.storage?.persist?.(); }catch{}   // ask Safari not to clear Jarvis' data
   let memories = store.get("mem", []);
   const MEM_MAX = 150;
   let notes = store.get("notes", []);
@@ -1398,7 +1417,20 @@ textarea::placeholder{color:var(--ink-3)}
     if(voices.length) $("voiceSel").value = cfg.voice;
     renderLists(); renderDiag(); $("sheet").hidden = false;
   };
-  fields.forEach(f => $(f).addEventListener("change", e => { cfg[f] = e.target.value; saveCfg(); syncPill(); if(f === "provider") dsThinkingParam = true; }));
+  fields.forEach(f => {
+    const save = e => { cfg[f] = e.target.value; saveCfg(); syncPill(); if(f === "provider") dsThinkingParam = true; };
+    $(f).addEventListener("change", save);
+    if($(f).tagName === "INPUT") $(f).addEventListener("input", save);
+  });
+  $("cfgLink").onclick = () => {
+    const pack = { c: cfg.claudeKey.trim(), d: cfg.dsKey.trim(), e: cfg.elKey.trim(), ...(cfg.dsBase && cfg.dsBase !== "https://api.deepseek.com" ? { b: cfg.dsBase } : {}) };
+    if(!pack.c && !pack.d && !pack.e){ addMsg("sys", "Colle d'abord au moins une clé."); return; }
+    const b64 = btoa(unescape(encodeURIComponent(JSON.stringify(pack)))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    const url = location.origin + location.pathname + "?ecoute#cfg=" + b64;
+    const b = $("cfgLink");
+    navigator.clipboard?.writeText(url).then(() => { b.textContent = "Lien copié ✓ — colle-le dans ton raccourci"; setTimeout(() => b.textContent = "Copier mon lien de connexion (clés incluses)", 4000); },
+      () => { prompt("Copie ce lien :", url); });
+  };
   $("webSel").onchange = e => { cfg.web = e.target.value === "1"; saveCfg(); };
   $("voiceSel").onchange = e => { cfg.voice = e.target.value; saveCfg(); speak("Voix sélectionnée.", true); };
   $("provPill").onclick = () => { const order = ["auto","claude","deepseek","local"]; cfg.provider = order[(order.indexOf(cfg.provider) + 1) % order.length]; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + PROV_LABEL[cfg.provider]); };
