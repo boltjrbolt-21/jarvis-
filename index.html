@@ -57,6 +57,9 @@ canvas#orb{width:76px;height:76px;flex:none;cursor:pointer}
 .msg.sys{align-self:center;font:12px var(--mono);color:var(--ink-3);text-align:center;max-width:92%}
 .msg.err .txt{color:var(--alert)}
 .msg img{display:block;max-width:180px;border-radius:10px;margin-bottom:6px}
+.msg .math{white-space:normal}
+.msg div.math{overflow-x:auto;overflow-y:hidden;padding:4px 0;margin:4px 0}
+.msg .katex{font-size:1.08em}
 .mactions{display:flex;gap:10px;margin-top:4px}
 .mactions button{all:unset;cursor:pointer;font:11px var(--mono);color:var(--ink-3)}
 .actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
@@ -354,6 +357,80 @@ textarea::placeholder{color:var(--ink-3)}
     if(reduce) requestAnimationFrame(drawOrb);
   }
 
+  // ================= math: KaTeX rendering on screen, French words for the voice =================
+  const KATEX = "https://cdn.jsdelivr.net/npm/katex@0.16/dist/";
+  const MATH_RE = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|\$([^\s$](?:[^$\n]*?[^\s$])?)\$/g;
+  const isTex = (inline, tex) => !inline || /[\\^_{}=+\-*\/<>]|\d/.test(tex) && !/^\d+(?:[.,]\d+)?$/.test(tex.trim());
+  let katexP = null;
+  function loadKatex(){
+    if(window.katex) return Promise.resolve(window.katex);
+    return katexP ||= new Promise((ok, ko) => {
+      const l = document.createElement("link"); l.rel = "stylesheet"; l.href = KATEX + "katex.min.css"; document.head.append(l);
+      const sc = document.createElement("script"); sc.src = KATEX + "katex.min.js";
+      sc.onload = () => ok(window.katex); sc.onerror = () => { katexP = null; ko(new Error("KaTeX indisponible")); };
+      document.head.append(sc);
+    });
+  }
+  async function renderMath(el, raw){
+    MATH_RE.lastIndex = 0;
+    if(!raw || !MATH_RE.test(raw)) return;
+    let k; try{ k = await loadKatex(); }catch{ return; }   // offline without cache: the LaTeX stays as text
+    if(el.closest(".msg")?.dataset.raw !== raw) return;     // the message changed meanwhile
+    const frag = document.createDocumentFragment(); let last = 0, m;
+    MATH_RE.lastIndex = 0;
+    while((m = MATH_RE.exec(raw))){
+      const inline = m[3] !== undefined || m[4] !== undefined, display = !inline;
+      const tex = m[1] ?? m[2] ?? m[3] ?? m[4];
+      if(m[4] !== undefined && !isTex(true, tex)) continue;   // a price like $5, not maths
+      frag.append(raw.slice(last, m.index));
+      const box = document.createElement(display ? "div" : "span"); box.className = "math";
+      box.innerHTML = k.renderToString(tex, { displayMode: display, throwOnError: false });
+      frag.append(box); last = m.index + m[0].length;
+    }
+    frag.append(raw.slice(last));
+    el.replaceChildren(frag);
+  }
+  const GREEK = { alpha:"alpha", beta:"bêta", gamma:"gamma", delta:"delta", Delta:"delta", epsilon:"epsilon", theta:"thêta", lambda:"lambda", mu:"mu", pi:"pi", rho:"rhô", sigma:"sigma", Sigma:"somme", tau:"tau", phi:"phi", omega:"oméga", Omega:"oméga" };
+  function mathToWords(tex){
+    let t = " " + tex + " ";
+    for(let pass = 0; pass < 4; pass++){
+      t = t.replace(/\\(?:text|mathrm|mathbf|operatorname|textrm)\s*\{([^{}]*)\}/g, " $1 ")
+        .replace(/\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, " $1 sur $2 ")
+        .replace(/\\sqrt\s*\[3\]\s*\{([^{}]*)\}/g, " racine cubique de $1 ")
+        .replace(/\\sqrt\s*\{([^{}]*)\}/g, " racine de $1 ")
+        .replace(/\^\s*\{\s*2\s*\}|\^2(?![0-9])/g, " au carré ")
+        .replace(/\^\s*\{\s*3\s*\}|\^3(?![0-9])/g, " au cube ")
+        .replace(/\^\s*\{([^{}]*)\}/g, " puissance $1 ")
+        .replace(/\^\s*(-?\w)/g, " puissance $1 ")
+        .replace(/_\s*\{([^{}]*)\}/g, " indice $1 ")
+        .replace(/_\s*(\w)/g, " indice $1 ");
+    }
+    t = t.replace(/\\(left|right|displaystyle|limits)\b/g, " ")
+      .replace(/\\[,;:!]|\\q?quad\b|~/g, " ")
+      .replace(/\\(?:times|cdot)\b|×|·/g, " fois ").replace(/\\div\b|÷/g, " divisé par ")
+      .replace(/\\pm\b|±/g, " plus ou moins ").replace(/\\(?:leq|le)\b|≤/g, " inférieur ou égal à ").replace(/\\(?:geq|ge)\b|≥/g, " supérieur ou égal à ")
+      .replace(/\\(?:neq|ne)\b|≠/g, " différent de ").replace(/\\approx\b|≈/g, " environ ")
+      .replace(/\\(?:Rightarrow|implies)\b|⇒/g, " donc ").replace(/\\(?:to|rightarrow)\b|→/g, " donne ")
+      .replace(/\\infty\b|∞/g, " l'infini ").replace(/\\%/g, " pour cent ").replace(/\\degree\b|\^\s*\\circ/g, " degrés ")
+      .replace(/\\([A-Za-z]+)/g, (x, n) => GREEK[n] ? " " + GREEK[n] + " " : " ")
+      .replace(/<=/g, " inférieur ou égal à ").replace(/>=/g, " supérieur ou égal à ")
+      .replace(/=/g, " égale ").replace(/</g, " inférieur à ").replace(/>/g, " supérieur à ")
+      .replace(/\+/g, " plus ").replace(/(\S)\s*-\s*(\S)/g, "$1 moins $2").replace(/^\s*-\s*/, " moins ")
+      .replace(/\b(km|m|cm|mm|g|mg|µg|kg|mol|mmol|L|mL|dL|h|s|min|UI)\s*\/\s*(km|m|L|mL|dL|h|s|min|kg|j|jour)\b/g, "$1 par $2")
+      .replace(/\//g, " sur ").replace(/\*/g, " fois ")
+      .replace(/(\d)\.(\d)/g, "$1,$2")
+      .replace(/[{}\\]/g, " ");
+    return t.replace(/\s+/g, " ").trim();
+  }
+  function speakMath(text){
+    if(!/[$\\²³]/.test(text)) return text;
+    MATH_RE.lastIndex = 0;
+    return text.replace(MATH_RE, (all, a, b, c, d) => {
+      const tex = a ?? b ?? c ?? d;
+      return d !== undefined && !isTex(true, tex) ? all : " " + mathToWords(tex) + " ";
+    }).replace(/(\w)²/g, "$1 au carré").replace(/(\w)³/g, "$1 au cube");
+  }
+
   // ================= log =================
   const log = $("log");
   const scroll = () => { log.scrollTop = log.scrollHeight; };
@@ -363,12 +440,13 @@ textarea::placeholder{color:var(--ink-3)}
     if(kind === "bot"){ const w = document.createElement("span"); w.className = "who"; w.textContent = opts.who || "Jarvis"; el.append(w); }
     if(opts.img){ const im = document.createElement("img"); im.src = opts.img; im.alt = "Image envoyée"; el.append(im); }
     const t = document.createElement("span"); t.className = "txt"; t.textContent = text; el.append(t);
+    if(kind === "bot"){ el.dataset.raw = text; renderMath(t, text); }
     if(kind === "bot" && !opts.plain){
       const a = document.createElement("div"); a.className = "mactions";
       const cp = document.createElement("button"); cp.type = "button"; cp.textContent = "copier";
-      cp.onclick = () => { navigator.clipboard?.writeText(t.textContent).then(() => { cp.textContent = "✓"; setTimeout(() => cp.textContent = "copier", 1200); }, () => {}); };
+      cp.onclick = () => { navigator.clipboard?.writeText(el.dataset.raw || t.textContent).then(() => { cp.textContent = "✓"; setTimeout(() => cp.textContent = "copier", 1200); }, () => {}); };
       const rp = document.createElement("button"); rp.type = "button"; rp.textContent = "relire";
-      rp.onclick = () => { stopListening(); speak(t.textContent, true); };
+      rp.onclick = () => { stopListening(); speak(el.dataset.raw || t.textContent, true); };
       // hand the exchange over to claude.ai (opens the Claude app when installed)
       const cl = document.createElement("button"); cl.type = "button"; cl.textContent = "continuer dans Claude ↗";
       cl.onclick = () => {
@@ -453,7 +531,7 @@ textarea::placeholder{color:var(--ink-3)}
   const useEleven = () => cfg.tts === "eleven" && !!cfg.elKey.trim();
   const queue = []; let speaking = false, started = false, ttsGen = 0, elCtl = new AbortController();
   function chunkText(text){
-    const clean = text.replace(/[*_#`>|]/g,"").replace(/https?:\/\/\S+/g,"").replace(/\[[^\]]*\]\([^)]*\)/g,"").trim();
+    const clean = speakMath(text).replace(/[*_#`>|]/g,"").replace(/https?:\/\/\S+/g,"").replace(/\[[^\]]*\]\([^)]*\)/g,"").trim();
     // cut only at sentence ends, and keep chunks long: fewer breaks = smoother speech
     const parts = clean.split(/(?<=[.!?…])\s+|\n+/).filter(p => p.trim());
     const max = useEleven() ? 400 : 240;
@@ -811,7 +889,7 @@ textarea::placeholder{color:var(--ink-3)}
   function systemPrompt(webOn, expert){
     return [
       "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. " + STYLES[cfg.persona],
-      "Tes réponses sont LUES À VOIX HAUTE : écris comme on parle, avec des tournures orales naturelles, des phrases qui s'enchaînent et des virgules là où l'on respire. Une ou deux phrases par défaut, sans markdown, sans listes, sans emoji, sans URL, sans abréviations ni symboles (écris « degrés », « pour cent », « kilomètres »). Pour une action (minuteur, note, mémoire), confirme en quelques mots.",
+      "Tes réponses sont LUES À VOIX HAUTE : écris comme on parle, avec des tournures orales naturelles, des phrases qui s'enchaînent et des virgules là où l'on respire. Une ou deux phrases par défaut, sans markdown, sans listes, sans emoji, sans URL, sans abréviations ni symboles (écris « degrés », « pour cent », « kilomètres »). Exception : pour un calcul, une formule ou une équation, écris les formules en LaTeX entre $…$ (ou $$…$$ pour une équation seule sur sa ligne), avec les unités, et donne les étapes en phrases courtes ; elles s'affichent en rendu mathématique et sont lues correctement. Pour une action (minuteur, note, mémoire), confirme en quelques mots.",
       `Maintenant : ${nowLong()} (Europe/Paris).`,
       webOn ? "Tu as accès à internet : cherche dès qu'on te demande l'actualité, la météo, un score, un prix, un horaire ou tout fait récent. N'annonce pas que tu vas chercher, cherche puis réponds. Actualité : les 3 titres principaux, une phrase chacun. Météo : températures, ciel, pluie." : "Tu n'as pas accès à internet : si on te demande un fait récent, dis-le en une phrase.",
       "Si l'utilisateur veut continuer, approfondir ou envoyer quelque chose dans Claude ou claude.ai, utilise show_link avec kind « claude ».",
@@ -1254,7 +1332,7 @@ textarea::placeholder{color:var(--ink-3)}
         out = await runDeepSeek(history, onText, ctl.signal);
       }
       out = (out || "").trim() || "Pas de réponse.";
-      txt.textContent = out;
+      txt.textContent = out; currentMsg.dataset.raw = out; renderMath(txt, out);
       turns.push({ role:"assistant", content: out }); saveTurns();
       const usedExpert = toolLog.some(x => x.startsWith("expert"));
       if(usedExpert && !forcedExpert) currentMsg.querySelector(".who").textContent = "Jarvis · " + PROV_LABEL[usedBy] + " + expert " + expertName();
