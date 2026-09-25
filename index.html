@@ -116,6 +116,18 @@ textarea::placeholder{color:var(--ink-3)}
 .camBar .iconbtn{background:rgba(12,19,28,.7)}
 .camHint{position:absolute;top:6px;left:10px;right:10px;font-size:11px;color:#fff;text-shadow:0 1px 3px #000}
 .cam.flash video{animation:flash .25s}
+.recbtn.on{background:var(--alert);color:var(--ground);border-color:var(--alert);animation:recpulse 1.4s infinite}
+.recpanel{margin-top:8px;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--panel)}
+.recpanel .recrow{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.recpanel .rectime{font:600 14px var(--mono);color:var(--alert)}
+.recpanel .rectext{margin-top:8px;max-height:84px;overflow:auto;color:var(--ink-2);font-size:13px;white-space:pre-wrap}
+.recpanel .recactions{display:flex;gap:8px;margin-top:10px}
+.recitem{align-items:flex-start!important;flex-wrap:wrap}
+.recitem .recmeta{flex:1;min-width:180px}
+.recitem .recmeta small{display:block;color:var(--ink-3);margin-top:2px}
+.recitem .recbuttons{display:flex;flex-wrap:wrap;gap:6px}
+.recitem audio{width:100%;height:34px;margin-top:6px}
+@keyframes recpulse{50%{box-shadow:0 0 0 5px rgba(240,138,110,.2)}}
 @keyframes flash{from{filter:brightness(2.2)}to{filter:none}}
 @media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
 </style>
@@ -128,6 +140,9 @@ textarea::placeholder{color:var(--ink-3)}
       <button class="pill" id="provPill" type="button" aria-label="Changer de modèle">Claude</button>
       <button class="iconbtn" id="camBtn" type="button" aria-pressed="false" aria-label="Caméra">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M15 10l5-3v10l-5-3z"/><rect x="3" y="6" width="12" height="12" rx="2.5"/></svg>
+      </button>
+      <button class="iconbtn recbtn" id="recBtn" type="button" aria-pressed="false" aria-label="Enregistrer un mémo, un cours ou une réunion">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/><circle cx="19" cy="5" r="2" fill="currentColor" stroke="none"/></svg>
       </button>
       <button class="iconbtn" id="voiceBtn" aria-pressed="true" aria-label="Réponses à voix haute">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 9v6h4l5 4V5L8 9H4z"/><path id="wave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>
@@ -156,6 +171,12 @@ textarea::placeholder{color:var(--ink-3)}
       <button class="round send" id="camShot" type="button" aria-label="Analyser l'image"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="7"/></svg></button>
       <button class="iconbtn" id="camClose" type="button" aria-label="Fermer la caméra">✕</button>
     </div>
+  </div>
+
+  <div class="recpanel" id="recPanel" hidden>
+    <div class="recrow"><strong id="recTitle">Enregistrement en cours</strong><span class="rectime" id="recTime">00:00</span></div>
+    <div class="rectext" id="recTranscript">Transcription en direct…</div>
+    <div class="recactions"><button class="iconbtn" id="recStop" type="button">Arrêter et sauvegarder</button></div>
   </div>
 
   <div class="log" id="log" role="log"></div>
@@ -313,6 +334,19 @@ textarea::placeholder{color:var(--ink-3)}
     </label>
     <button class="iconbtn wide" id="testVoice" type="button">Tester la voix</button>
 
+    <h3>Calendrier et rappels Apple</h3>
+    <label class="stack">Nom du raccourci compagnon
+      <input id="appleShortcut" type="text" maxlength="80" placeholder="Jarvis Calendrier">
+      <span class="note">Le raccourci Apple autorise Jarvis à lire, créer, modifier ou supprimer tes événements et rappels. iOS te demandera ton accord.</span>
+    </label>
+    <button class="iconbtn wide" id="copyShortcutSetup" type="button">Copier la configuration du raccourci</button>
+    <button class="iconbtn wide" id="testShortcut" type="button">Tester le pont Calendrier</button>
+    <span class="note" style="display:block;padding-block:6px">La création simple reste aussi disponible sans raccourci grâce au bouton « Ajouter au Calendrier ».</span>
+
+    <h3>Enregistrements</h3>
+    <span class="note" style="display:block;padding-block:6px">Les fichiers audio restent sur cet iPhone. La transcription en direct est envoyée à l'IA uniquement lorsque tu demandes un résumé.</span>
+    <ul class="memlist" id="recordlist"></ul>
+
     <h3>Apprentissage</h3>
     <span class="note" style="display:block">Note les réponses avec 👍 ou 👎, ou dis « non, c'est faux ». Tous les 6 avis, l'expert relit vos échanges et réécrit les règles de l'équipe : quand consulter l'expert, quand s'en passer, comment te répondre. Tu peux les modifier ici.</span>
     <textarea id="lessons" rows="6" placeholder="Pas encore de règles apprises." style="width:100%;margin-top:8px;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:8px;padding:8px;font:13px/1.45 var(--body);max-height:none"></textarea>
@@ -352,7 +386,7 @@ textarea::placeholder{color:var(--ink-3)}
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
     web: true, persona: "concis", coach: "on", brief: "on", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
     localModel: "Qwen2.5-1.5B-Instruct",
-    tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: ""
+    tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: "", appleShortcut: "Jarvis Calendrier"
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
   // keys carried in the link (#cfg=…, never sent to the server): restores them in any Safari context
@@ -381,7 +415,7 @@ textarea::placeholder{color:var(--ink-3)}
   let turns = store.get("turns", []);           // [{role, content(string)}]
   let timers = [];
   let busy = false, ctl = null, pendingImg = null, mode = "idle";
-  const diag = { modèle:"—", internet:"—", micro:"—", caméra:"—", voix:"—", dernier:"aucun envoi" };
+  const diag = { modèle:"—", internet:"—", micro:"—", caméra:"—", enregistrement:"—", calendrier:"pont non testé", voix:"—", dernier:"aucun envoi" };
 
   const fmtLeft = ms => { const s = Math.max(0, Math.round(ms/1000)); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
   const nowLong = () => new Date().toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});
@@ -883,6 +917,16 @@ textarea::placeholder{color:var(--ink-3)}
       claude: claudeLink(value)
     }[kind] || null;
   }
+  function appleShortcutURL(action, payload = {}){
+    const name = (cfg.appleShortcut || "Jarvis Calendrier").trim();
+    const callback_url = location.origin + location.pathname + "?ecoute#jarvis_callback=";
+    const input = JSON.stringify({ version:1, action, payload, callback_url, requested_at:new Date().toISOString() });
+    return "shortcuts://run-shortcut?name=" + encodeURIComponent(name) + "&input=text&text=" + encodeURIComponent(input);
+  }
+  function addAppleAction(label, action, payload){
+    store.set("applePending", { action, payload, t:Date.now() });
+    if(currentMsg) addAction(currentMsg, label, appleShortcutURL(action, payload), null, true);
+  }
   const obj = (props, req) => ({ type:"object", properties: props, required: req || [] });
   const TOOLS = [
     { name:"set_timer", description:"Lance un minuteur. Retourne l'heure de fin.",
@@ -931,12 +975,31 @@ textarea::placeholder{color:var(--ink-3)}
           "END:VEVENT","END:VCALENDAR"].join("\r\n");
         const google = "https://calendar.google.com/calendar/render?action=TEMPLATE&text=" + encodeURIComponent(title) + "&dates=" + z(start) + "/" + z(end) + (loc ? "&location=" + encodeURIComponent(loc) : "") + (notes ? "&details=" + encodeURIComponent(notes) : "");
         if(currentMsg){
+          addAppleAction("Créer directement sur l'iPhone", "create_event", { title, start:i.start, duration_minutes:dur, alert_minutes_before:before, location:loc, notes });
           addAction(currentMsg, "Ajouter au Calendrier", "data:text/calendar;charset=utf-8," + encodeURIComponent(ics), null, true);
           addAction(currentMsg, "Google Agenda", google);
         }
         toolLog.push("calendrier");
         return { ok:true, debut: start.toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"}), alerte_minutes_avant: before, a_faire: "l'utilisateur doit toucher « Ajouter au Calendrier » puis « Ajouter »" };
       } },
+    { name:"read_calendar", description:"Lit l'agenda Apple de l'utilisateur sur une période. Affiche un bouton qui lance le raccourci Apple sécurisé ; l'utilisateur doit le toucher.",
+      parameters: obj({ from:{type:"string", description:"Début local AAAA-MM-JJTHH:MM"}, to:{type:"string", description:"Fin locale AAAA-MM-JJTHH:MM"} }, ["from","to"]),
+      run: i => { addAppleAction("Lire mon agenda", "list_events", { from:String(i.from), to:String(i.to) }); toolLog.push("lecture calendrier"); return { ok:true, a_faire:"toucher « Lire mon agenda » ; Jarvis reprendra avec le résultat du raccourci" }; } },
+    { name:"update_calendar_event", description:"Modifie un rendez-vous Apple existant, identifié par son titre ou son identifiant. Affiche un bouton de confirmation iPhone.",
+      parameters: obj({ search:{type:"string", description:"Titre actuel ou identifiant"}, title:{type:"string"}, start:{type:"string", description:"Nouvelle date locale AAAA-MM-JJTHH:MM"}, duration_minutes:{type:"number"}, location:{type:"string"}, notes:{type:"string"} }, ["search"]),
+      run: i => { addAppleAction("Modifier dans Calendrier", "update_event", i); toolLog.push("modification calendrier"); return { ok:true, a_faire:"toucher le bouton puis confirmer l'événement proposé" }; } },
+    { name:"delete_calendar_event", description:"Supprime un rendez-vous Apple existant identifié par son titre ou son identifiant. Affiche un bouton de confirmation iPhone.",
+      parameters: obj({ search:{type:"string", description:"Titre actuel ou identifiant"}, from:{type:"string"}, to:{type:"string"} }, ["search"]),
+      run: i => { addAppleAction("Supprimer du Calendrier", "delete_event", i); toolLog.push("suppression calendrier"); return { ok:true, a_faire:"toucher le bouton puis confirmer la suppression dans le raccourci" }; } },
+    { name:"add_apple_reminder", description:"Crée un rappel Apple avec date, heure, notes et priorité. Affiche un bouton de confirmation iPhone.",
+      parameters: obj({ title:{type:"string"}, due:{type:"string", description:"Échéance locale AAAA-MM-JJTHH:MM"}, notes:{type:"string"}, priority:{type:"string", enum:["aucune","basse","moyenne","haute"]} }, ["title"]),
+      run: i => { addAppleAction("Ajouter aux Rappels", "create_reminder", i); toolLog.push("rappel Apple"); return { ok:true, a_faire:"toucher « Ajouter aux Rappels »" }; } },
+    { name:"read_apple_reminders", description:"Lit les rappels Apple ouverts. Affiche un bouton qui lance le raccourci Apple sécurisé.",
+      parameters: obj({ list:{type:"string"}, include_completed:{type:"boolean"} }),
+      run: i => { addAppleAction("Lire mes rappels", "list_reminders", i); toolLog.push("lecture rappels"); return { ok:true, a_faire:"toucher « Lire mes rappels »" }; } },
+    { name:"update_apple_reminder", description:"Modifie, termine ou supprime un rappel Apple identifié par son titre ou son identifiant.",
+      parameters: obj({ search:{type:"string"}, operation:{type:"string", enum:["update","complete","delete"]}, title:{type:"string"}, due:{type:"string"}, notes:{type:"string"} }, ["search","operation"]),
+      run: i => { addAppleAction(i.operation === "delete" ? "Supprimer le rappel" : i.operation === "complete" ? "Marquer comme terminé" : "Modifier le rappel", "update_reminder", i); toolLog.push("modification rappel"); return { ok:true, a_faire:"toucher le bouton et confirmer" }; } },
     { name:"calculate", description:"Calcule une expression : + - * / ^ %, parenthèses, sqrt(). Ex. « 15% de 240 ».",
       parameters: obj({ expression:{type:"string"} }, ["expression"]),
       run: i => { toolLog.push("calcul"); return { resultat: calc(i.expression) }; } },
@@ -1000,7 +1063,7 @@ textarea::placeholder{color:var(--ink-3)}
       expert ? "Tu travailles avec un expert plus puissant : pour une question difficile ou importante (santé, médicaments, raisonnement complexe), consulte ask_expert, puis donne sa réponse en l'abrégeant pour l'oral, sans dire que tu l'as consulté sauf si on te le demande." : "",
       cfg.coach !== "off" ? COACH + "\n" + goalsBrief() : "",
       "Utilise tes outils quand c'est utile. Mémorise un fait durable que l'utilisateur énonce clairement.",
-      "Jarvis s'arrête quand la page est fermée : mémoire et notes restent enregistrées, mais un minuteur ne sonne que si Jarvis reste ouvert. Pour un rendez-vous, un rappel à une date ou une heure, ou un minuteur long, utilise add_event (alerte du Calendrier de l'iPhone, fiable même Jarvis fermé) puis dis en une phrase de toucher « Ajouter au Calendrier ».",
+      "Jarvis s'arrête quand la page est fermée : mémoire et notes restent enregistrées, mais un minuteur ne sonne que si Jarvis reste ouvert. Pour créer un rendez-vous daté, utilise add_event. Pour consulter, modifier ou supprimer l'agenda, utilise read_calendar, update_calendar_event ou delete_calendar_event. Pour les tâches Apple, utilise add_apple_reminder, read_apple_reminders ou update_apple_reminder. Dis simplement de toucher le bouton affiché : le raccourci Apple demandera l'autorisation et renverra le résultat à Jarvis.",
       "Minuteurs en cours : " + (timers.filter(t => !t.done).map(t => `${t.label} (reste ${fmtLeft(t.end - Date.now())})`).join(", ") || "aucun") + ".",
       "Mémoire : " + (memories.length ? memories.map(m => "- " + m).join("\n") : "vide"),
       "Notes : " + (notes.length ? notes.map(n => "- " + n).join("\n") : "aucune")
@@ -1404,6 +1467,75 @@ textarea::placeholder{color:var(--ink-3)}
     finally{ reflecting = false; setReflectingUI(false); if(!$("sheet").hidden) renderDiag(); }
   }
 
+  // ================= recordings (audio stays in IndexedDB; only transcript is analyzed on request) =================
+  const REC_DB = "jarvis-recordings", REC_STORE = "audio";
+  let mediaRec = null, recStream = null, recChunks = [], recStarted = 0, recTick = null, recordRec = null, recFinal = "", recInterim = "";
+  const recording = () => !!mediaRec && mediaRec.state !== "inactive";
+  function recDb(){
+    return new Promise((ok, ko) => { const q = indexedDB.open(REC_DB, 1); q.onupgradeneeded = () => q.result.createObjectStore(REC_STORE, { keyPath:"id" }); q.onsuccess = () => ok(q.result); q.onerror = () => ko(q.error); });
+  }
+  async function recPut(item){ const db = await recDb(); await new Promise((ok,ko) => { const tx=db.transaction(REC_STORE,"readwrite"); tx.objectStore(REC_STORE).put(item); tx.oncomplete=ok; tx.onerror=()=>ko(tx.error); }); db.close(); }
+  async function recAll(){ const db = await recDb(); const out = await new Promise((ok,ko) => { const q=db.transaction(REC_STORE).objectStore(REC_STORE).getAll(); q.onsuccess=()=>ok(q.result || []); q.onerror=()=>ko(q.error); }); db.close(); return out.sort((a,b)=>b.created-a.created); }
+  async function recGet(id){ const db = await recDb(); const out = await new Promise((ok,ko) => { const q=db.transaction(REC_STORE).objectStore(REC_STORE).get(id); q.onsuccess=()=>ok(q.result); q.onerror=()=>ko(q.error); }); db.close(); return out; }
+  async function recDelete(id){ const db = await recDb(); await new Promise((ok,ko) => { const tx=db.transaction(REC_STORE,"readwrite"); tx.objectStore(REC_STORE).delete(id); tx.oncomplete=ok; tx.onerror=()=>ko(tx.error); }); db.close(); }
+  const recClock = ms => { const s=Math.max(0,Math.round(ms/1000)), h=Math.floor(s/3600), m=Math.floor(s%3600/60), x=s%60; return (h ? String(h).padStart(2,"0")+":" : "") + String(m).padStart(2,"0")+":"+String(x).padStart(2,"0"); };
+  function updateRecTranscript(){ $("recTranscript").textContent = (recFinal + (recInterim ? " " + recInterim : "")).trim() || "Transcription en direct…"; }
+  function startRecordRecognition(){
+    if(!SR || !recording()) return;
+    try{
+      const r = new SR(); r.lang="fr-FR"; r.continuous=true; r.interimResults=true;
+      r.onresult = e => { recInterim=""; for(let i=e.resultIndex;i<e.results.length;i++){ const t=e.results[i][0].transcript.trim(); if(e.results[i].isFinal) recFinal += (recFinal ? " " : "") + t; else recInterim += (recInterim ? " " : "") + t; } updateRecTranscript(); };
+      r.onerror = () => {};
+      r.onend = () => { if(recordRec === r) recordRec=null; if(recording()) setTimeout(startRecordRecognition, 300); };
+      recordRec=r; r.start();
+    }catch{}
+  }
+  async function startRecording(title){
+    if(recording()) return false;
+    if(!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder){ addMsg("sys", "L'enregistrement audio n'est pas disponible ici : ouvre Jarvis dans Safari."); return false; }
+    try{
+      stopSpeaking(); conv=false; stopListening();
+      recStream = await navigator.mediaDevices.getUserMedia({ audio:{ echoCancellation:true, noiseSuppression:true, autoGainControl:true }, video:false });
+      const mime = ["audio/mp4","audio/webm;codecs=opus","audio/webm"].find(x => MediaRecorder.isTypeSupported?.(x)) || "";
+      mediaRec = new MediaRecorder(recStream, mime ? { mimeType:mime } : undefined); recChunks=[]; recFinal=""; recInterim=""; recStarted=Date.now();
+      mediaRec.ondataavailable = e => { if(e.data?.size) recChunks.push(e.data); };
+      mediaRec.onstop = async () => {
+        const duration=Date.now()-recStarted, blob=new Blob(recChunks,{type:mediaRec.mimeType || mime || "audio/mp4"});
+        const item={ id:"rec-"+Date.now().toString(36), title:String(title || "Enregistrement du " + new Date(recStarted).toLocaleString("fr-FR",{day:"numeric",month:"long",hour:"2-digit",minute:"2-digit"})).slice(0,120), created:recStarted, duration, mime:blob.type, transcript:(recFinal+" "+recInterim).trim(), blob };
+        try{ await recPut(item); addMsg("sys", `Enregistrement sauvegardé sur l'iPhone (${recClock(duration)}).${item.transcript ? " Transcription prête." : " Aucune transcription détectée."}`); diag.enregistrement="OK · "+recClock(duration); }
+        catch(e){ addMsg("sys", "Audio enregistré, mais la sauvegarde locale a échoué : "+e.message); diag.enregistrement="erreur de sauvegarde"; }
+        recStream?.getTracks().forEach(t=>t.stop()); recStream=null; mediaRec=null; recChunks=[]; $("recPanel").hidden=true; $("recBtn").classList.remove("on"); $("recBtn").setAttribute("aria-pressed","false"); clearInterval(recTick); keepAwake(false); renderRecordings();
+      };
+      mediaRec.start(1000); $("recTitle").textContent=title || "Enregistrement en cours"; $("recPanel").hidden=false; $("recBtn").classList.add("on"); $("recBtn").setAttribute("aria-pressed","true"); $("recTime").textContent="00:00"; updateRecTranscript();
+      recTick=setInterval(()=>$("recTime").textContent=recClock(Date.now()-recStarted),1000); keepAwake(true); startRecordRecognition(); diag.enregistrement="en cours"; return true;
+    }catch(e){ recStream?.getTracks().forEach(t=>t.stop()); recStream=null; mediaRec=null; diag.enregistrement="erreur : "+e.name; addMsg("sys", e.name === "NotAllowedError" ? "Micro refusé. Autorise le microphone dans les réglages Safari du site." : "Enregistrement impossible ("+(e.message||e.name)+")."); return false; }
+  }
+  function stopRecording(){ if(!recording()) return; try{ recordRec?.stop(); }catch{} recordRec=null; try{ mediaRec.stop(); }catch{} }
+  async function summarizeRecording(id){
+    const item=await recGet(id); if(!item?.transcript){ addMsg("sys","Cet enregistrement n'a pas de transcription exploitable."); return; }
+    $("sheet").hidden=true;
+    const transcript=item.transcript.slice(0,50000);
+    send(`Analyse la transcription de l'enregistrement « ${item.title} ». Donne un résumé structuré et fidèle, puis les décisions, notions importantes et tâches concrètes. Enregistre chaque tâche non datée avec add_note. Pour une tâche datée explicitement, utilise add_event ou add_apple_reminder. N'invente rien.\n\nTRANSCRIPTION :\n${transcript}`, { hidden:true });
+  }
+  async function renderRecordings(){
+    const ul=$("recordlist"); if(!ul) return; ul.innerHTML="";
+    let arr=[]; try{ arr=await recAll(); }catch{}
+    if(!arr.length){ const li=document.createElement("li"); li.className="empty"; li.textContent="Aucun enregistrement."; ul.append(li); return; }
+    arr.forEach(item => {
+      const li=document.createElement("li"); li.className="recitem";
+      const meta=document.createElement("div"); meta.className="recmeta"; const name=document.createElement("span"); name.textContent=item.title; const small=document.createElement("small"); small.textContent=new Date(item.created).toLocaleString("fr-FR")+" · "+recClock(item.duration)+(item.transcript?" · transcrit":" · sans transcription"); meta.append(name,small);
+      const buttons=document.createElement("div"); buttons.className="recbuttons";
+      const play=document.createElement("button"); play.type="button"; play.textContent="Écouter";
+      play.onclick=()=>{ let a=li.querySelector("audio"); if(a){ a.remove(); return; } a=document.createElement("audio"); a.controls=true; a.src=URL.createObjectURL(item.blob); a.onended=()=>URL.revokeObjectURL(a.src); li.append(a); a.play().catch(()=>{}); };
+      const sum=document.createElement("button"); sum.type="button"; sum.textContent="Résumé + tâches"; sum.disabled=!item.transcript; sum.onclick=()=>summarizeRecording(item.id);
+      const share=document.createElement("button"); share.type="button"; share.textContent="Partager"; share.onclick=async()=>{ const ext=/mp4/.test(item.mime)?"m4a":"webm", file=new File([item.blob],item.title.replace(/[^\p{L}\p{N} _-]/gu,"").slice(0,60)+"."+ext,{type:item.mime}); if(navigator.canShare?.({files:[file]})) await navigator.share({files:[file],title:item.title}); else { const a=document.createElement("a"); a.href=URL.createObjectURL(item.blob); a.download=file.name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); } };
+      const del=document.createElement("button"); del.type="button"; del.textContent="Suppr."; del.onclick=async()=>{ if(confirm("Supprimer définitivement cet enregistrement ?")){ await recDelete(item.id); renderRecordings(); } };
+      buttons.append(play,sum,share,del); li.append(meta,buttons); ul.append(li);
+    });
+  }
+  $("recBtn").onclick=()=>{ if(recording()) stopRecording(); else startRecording(); };
+  $("recStop").onclick=stopRecording;
+
   // ================= camera (live preview, a frame is sent with each question) =================
   let camStream = null, camFacing = "environment";
   const camLive = () => !!camStream && camStream.getVideoTracks().some(t => t.readyState === "live");
@@ -1471,6 +1603,11 @@ textarea::placeholder{color:var(--ink-3)}
     const missing = keyMissing();
     if(missing){ addMsg("sys", missing); $("setBtn").click(); return; }
     stopSpeaking(); stopListening();
+    // voice control for long-form recordings
+    const recStopMatch = /^(?:jarvis[, ]+)?(?:arr[êe]te|stoppe|termine|coupe)\s+(?:l['’]\s*)?(?:enregistrement|audio|m[ée]mo)\W*$/i.test(text.trim());
+    const recStartMatch = /^(?:jarvis[, ]+)?(?:commence|d[ée]marre|lance|fais)\s+(?:un |l['’])?(?:enregistrement|m[ée]mo vocal)(?:\s+(?:de|du|pour)\s+(.+))?\W*$/i.exec(text.trim()) || /^(?:jarvis[, ]+)?enregistre\s+((?:mon |ma |le |la |un |une )?(?:cours|r[ée]union|conversation|audio|m[ée]mo).*)$/i.exec(text.trim());
+    if(recStopMatch && !opts.hidden){ addMsg("user", text); if(recording()){ stopRecording(); addMsg("bot","J'arrête et je sauvegarde l'enregistrement.",{plain:true}); } else addMsg("bot","Aucun enregistrement n'est en cours.",{plain:true}); return; }
+    if(recStartMatch && !opts.hidden){ addMsg("user", text); const ok=await startRecording(recStartMatch[1] || ""); addMsg("bot",ok ? "Enregistrement lancé. Je sauvegarderai l'audio et la transcription sur cet iPhone." : "Je n'ai pas pu lancer l'enregistrement.",{plain:true}); return; }
     // "ouvre / ferme la caméra"
     const cm = /^(?:jarvis[, ]+)?(ouvr|allum|activ|lanc|ferm|coup|[ée]tein|d[ée]sactiv|arr[êe]t)\w*\s+(?:la\s+)?cam[ée]ra\W*$/i.exec(text.trim());
     if(cm && !opts.hidden){
@@ -1629,7 +1766,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
@@ -1655,7 +1792,7 @@ textarea::placeholder{color:var(--ink-3)}
     $("lessons").value = lessons;
     $("webSel").value = cfg.web ? "1" : "0"; syncTts();
     if(voices.length) $("voiceSel").value = cfg.voice;
-    renderLists(); renderDiag(); $("sheet").hidden = false;
+    renderLists(); renderRecordings(); renderDiag(); $("sheet").hidden = false;
   };
   fields.forEach(f => {
     const save = e => { cfg[f] = e.target.value; saveCfg(); syncPill(); if(f === "provider") dsThinkingParam = true; };
@@ -1705,6 +1842,29 @@ textarea::placeholder{color:var(--ink-3)}
     stopListening(); speak("Salut, c'est Jarvis. Voilà à quoi ressemble ma voix.", true);
     setTimeout(renderDiag, 4000);
   };
+  const SHORTCUT_SETUP = `Crée dans l'app Raccourcis un raccourci nommé « Jarvis Calendrier » (ou le nom choisi dans Jarvis).
+
+Entrée : texte JSON fourni par Jarvis. Utilise « Obtenir le dictionnaire à partir de l'entrée », puis lis les clés action, payload et callback_url.
+
+Actions à gérer :
+- ping : renvoyer {"ok":true,"message":"Pont Apple prêt"}
+- create_event : créer un événement avec title, start, duration_minutes, alert_minutes_before, location et notes
+- list_events : rechercher les événements entre from et to, puis renvoyer un JSON avec items [{id,title,start,end,location,notes}]
+- update_event : rechercher par search, demander de choisir en cas d'ambiguïté, puis modifier les champs reçus
+- delete_event : rechercher par search, demander confirmation, puis supprimer
+- create_reminder : ajouter un rappel avec title, due, notes et priority
+- list_reminders : rechercher les rappels non terminés et renvoyer items [{id,title,due,notes,completed}]
+- update_reminder : rechercher par search, puis update, complete ou delete selon operation
+
+À la fin de chaque branche, transforme le résultat JSON avec « Encoder l'URL », ajoute-le après callback_url, puis utilise « Ouvrir les URL ». Le schéma de retour est {"ok":true,"action":"...","items":[]} ou {"ok":false,"error":"..."}. Le résultat reste dans le fragment # de l'adresse et n'est pas envoyé à GitHub. Autorise Calendrier et Rappels lorsque l'iPhone le demande.
+
+Documentation complète : ${location.origin + location.pathname.replace(/[^/]*$/, "") + "RACCOURCI_APPLE.md"}`;
+  $("copyShortcutSetup").onclick = () => {
+    const b=$("copyShortcutSetup"); navigator.clipboard?.writeText(SHORTCUT_SETUP).then(()=>{ b.textContent="Configuration copiée ✓"; setTimeout(()=>b.textContent="Copier la configuration du raccourci",3000); },()=>prompt("Copie cette configuration :",SHORTCUT_SETUP));
+  };
+  $("testShortcut").onclick = () => {
+    store.set("applePending",{action:"ping",payload:{},t:Date.now()}); diag.calendrier="test lancé"; $("sheet").hidden=true; location.href=appleShortcutURL("ping",{});
+  };
   $("testApi").onclick = async () => {
     const b = $("testApi"); b.disabled = true; b.textContent = "Test en cours…";
     const res = [];
@@ -1747,11 +1907,32 @@ textarea::placeholder{color:var(--ink-3)}
   $("closeSheet").onclick = () => { $("sheet").hidden = true; };
   $("sheet").onclick = e => { if(e.target.id === "sheet") $("sheet").hidden = true; };
 
+  function consumeAppleCallback(){
+    const m=/#jarvis_callback=([\s\S]*)/.exec(location.hash);
+    if(!m) return;
+    const pending=store.get("applePending",null); store.set("applePending",null);
+    {
+      let raw=""; try{ raw=decodeURIComponent(m[1]); }catch{ raw=m[1]; } let data=raw;
+      try{ data=JSON.parse(raw); }catch{}
+      const ok=typeof data === "object" ? data.ok !== false : !!raw;
+      diag.calendrier=ok ? "connecté · OK" : "erreur";
+      const action=pending?.action || (typeof data === "object" ? data.action : "action");
+      if(!ok) addMsg("sys","Calendrier : "+(data?.error || raw || "échec de l'action"));
+      else if(action === "ping") addMsg("sys","Pont Apple Calendrier et Rappels connecté ✓");
+      else{
+        addMsg("sys","Résultat reçu depuis Apple Calendrier/Rappels.");
+        if(!keyMissing()) setTimeout(()=>send(`Voici le résultat privé renvoyé par le raccourci Apple pour l'action ${action}. Réponds directement à la demande, en français, sans inventer d'élément absent.\n${typeof data === "string" ? data : JSON.stringify(data)}`,{hidden:true}),350);
+      }
+    }
+    history.replaceState(null,"",location.pathname+"?ecoute");
+  }
+
   // ================= boot =================
   turns.forEach(t => { if(!t.hidden) addMsg(t.role === "user" ? "user" : "bot", t.content, t.role === "user" ? {} : { who:"Jarvis" }); });
   if(!turns.length){
     addMsg("bot", keyMissing() ? "Bonjour. Colle ta clé Claude ou DeepSeek dans les réglages, ou, si tu as ton lien de connexion, touche Réglages › Coller mon lien de connexion." : "Prêt. Touche le micro pour parler.", { plain:true });
   }
+  consumeAppleCallback();
   (store.get("timers", []) || []).forEach(t => { timers.push({ ...t }); });
   timers.forEach(t => { if(!t.done){ if(t.end > Date.now()){ schedule(t); keepAwake(true); } else fireTimer(t.id); } });
   renderTimers();

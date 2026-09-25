@@ -1,7 +1,7 @@
 // Lets Jarvis open without network (for the local model).
 // Page: network first, cached copy when offline. Libraries and fonts: cached after the first load.
 // API calls and model weights are never touched here (the local model caches its own weights).
-const CACHE = "jarvis-v4";
+const CACHE = "jarvis-v5";
 const LIB_HOSTS = ["cdn.jsdelivr.net", "fonts.googleapis.com", "fonts.gstatic.com"];
 
 self.addEventListener("install", () => self.skipWaiting());
