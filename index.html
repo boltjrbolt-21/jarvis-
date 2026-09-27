@@ -272,6 +272,9 @@ textarea::placeholder{color:var(--ink-3)}
         <option value="Qwen2.5-0.5B-Instruct">Qwen 2.5 · 0,5 B (≈ 400 Mo, plus léger)</option>
       </select>
     </label>
+    <label>Spécialité du modèle local
+      <select id="localSpec"><option value="sante">Sciences, pharmacie, médecine</option><option value="general">Généraliste</option></select>
+    </label>
     <button class="iconbtn wide" id="localLoad" type="button">Télécharger et tester le modèle local</button>
     <span class="note" style="display:block;padding-block:6px">Tourne entièrement sur l'iPhone : rien n'est envoyé, aucune clé, aucun coût. À télécharger une fois (en Wi-Fi). Il comprend et parle moins bien que Claude, n'a pas accès à internet et ne gère que les minuteurs, la mémoire et les calculs simples. Demande iOS 26 ou plus récent (WebGPU).</span>
 
@@ -385,7 +388,7 @@ textarea::placeholder{color:var(--ink-3)}
     provider: "auto", expert: "claude-sonnet-5", pharma: "auto", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
     web: true, persona: "concis", coach: "on", brief: "on", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
-    localModel: "Qwen2.5-1.5B-Instruct",
+    localModel: "Qwen2.5-1.5B-Instruct", localSpec: "sante",
     tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: "", appleShortcut: "Jarvis Calendrier"
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
@@ -1395,14 +1398,28 @@ textarea::placeholder{color:var(--ink-3)}
     if(cm){ try{ return "Ça fait " + String(calc(cm[1])).replace(".", ",") + "."; }catch{} }
     return null;
   }
+  // local model specialised by its instructions (no retraining): sciences, pharmacy, medicine
+  const LOCAL_SANTE = [
+    "Tu es spécialisé en sciences de la santé : pharmacologie, pharmacie galénique et clinique, physiologie, biochimie, microbiologie, immunologie, chimie et médecine. Tu aides Kévin à comprendre et à réviser.",
+    "Méthode : définis d'abord le terme, puis explique le mécanisme, puis l'intérêt clinique. Pour un médicament : classe, mécanisme d'action, indications, effets indésirables principaux, contre-indications et interactions majeures. Donne la DCI, pas le nom commercial.",
+    "Réponds en deux à cinq phrases claires, avec le vocabulaire exact d'un pharmacien.",
+    "Honnêteté avant tout : tu fonctionnes hors ligne et tu peux te tromper. N'invente jamais une dose, une valeur, un chiffre ou une référence. Si tu n'es pas sûr, dis « je ne suis pas sûr » et conseille de vérifier dans le RCP ou le Vidal, ou de reposer la question en ligne en mode Pharma.",
+    "Pour une question hors sciences et santé, réponds en une phrase et rappelle que tu es réglé sur les sciences de la santé."
+  ].join(" ");
+  const LOCAL_SHOTS = [
+    { role:"user", content:"C'est quoi un IEC ?" },
+    { role:"assistant", content:"Un IEC, ou inhibiteur de l'enzyme de conversion, bloque la transformation de l'angiotensine I en angiotensine II, un puissant vasoconstricteur. Résultat : les vaisseaux se dilatent et la tension baisse. On les utilise dans l'hypertension, l'insuffisance cardiaque et pour protéger le rein du diabétique, par exemple le ramipril. Leur effet indésirable typique est une toux sèche, et ils sont contre-indiqués pendant la grossesse." }
+  ];
   async function runLocal(history, onText, signal){
     const last = history[history.length-1];
     const direct = typeof last?.content === "string" ? localCommand(last.content) : null;
     if(direct){ onText(direct); return direct; }
     const eng = await loadLocal(r => setMode("thinking", "Chargement du modèle local… " + Math.round((r.progress || 0) * 100) + " %"));
     setMode("thinking", "Réflexion (local)…");
+    const spec = cfg.localSpec !== "general";
     const sys = [
-      "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Tu réponds toujours en français, en une à trois phrases naturelles, sans markdown ni listes, car tes réponses sont lues à voix haute. Tu tutoies.",
+      "Tu es Jarvis, l'assistant vocal de Kévin, étudiant en pharmacie à Dijon. Tu réponds toujours en français, en phrases naturelles, sans markdown ni listes, car tes réponses sont lues à voix haute. Tu tutoies.",
+      spec ? LOCAL_SANTE : "Réponds en une à trois phrases.",
       cfg.coach !== "off" ? "Tu es aussi son coach : motive-le avec franchise et bienveillance, sans flatterie, et propose toujours une prochaine action concrète et réaliste. En cas de détresse sérieuse, donne le 3114.\n" + goalsBrief() : "",
       `Maintenant : ${nowLong()}.`,
       "Tu n'as pas accès à internet : pour l'actualité, la météo ou un fait récent, dis simplement que tu ne peux pas le savoir hors ligne.",
@@ -1411,12 +1428,14 @@ textarea::placeholder{color:var(--ink-3)}
       notes.length ? "Ses notes : " + notes.join(" ; ") : ""
     ].filter(Boolean).join("\n");
     const recent = history.slice(-10); while(recent.length > 1 && recent[0].role !== "user") recent.shift();
-    const msgs = [{ role:"system", content: sys }, ...recent.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" }))];
+    // a worked example steers a small model far better than instructions alone
+    const shots = spec ? LOCAL_SHOTS : [];
+    const msgs = [{ role:"system", content: sys }, ...shots, ...recent.map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" }))];
     const onAbort = () => { try{ eng.interruptGenerate(); }catch{} };
     signal.addEventListener("abort", onAbort);
     let full = "";
     try{
-      const stream = await eng.chat.completions.create({ messages: msgs, stream: true, temperature: .6, max_tokens: 320 });
+      const stream = await eng.chat.completions.create({ messages: msgs, stream: true, temperature: spec ? .3 : .6, max_tokens: spec ? 420 : 320 });
       for await (const ch of stream){
         const d = ch.choices?.[0]?.delta?.content;
         if(d){ full += d; onText(full); }
@@ -1780,7 +1799,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec"];
   const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
