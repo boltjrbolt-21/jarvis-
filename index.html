@@ -741,7 +741,12 @@ textarea::placeholder{color:var(--ink-3)}
   function elFetch(text){
     const voice = cfg.elVoice.trim() || "JBFqnCBsd6RMkjVDRZzb";
     const model = cfg.elModel || "eleven_flash_v2_5";
-    const body = { text, model_id: model, voice_settings: { stability: .4, similarity_boost: .8, style: .2, use_speaker_boost: true, speed: Math.min(1.2, Math.max(.7, Number(cfg.rate) || 1)) } };
+    // a cloned voice (custom ID) needs maximum resemblance: high similarity, no style exaggeration, natural speed
+    const cloned = !!cfg.elVoice.trim();
+    const speed = Math.min(1.2, Math.max(.7, Number(cfg.rate) || 1));
+    const body = { text, model_id: model, voice_settings: cloned
+      ? { stability: .5, similarity_boost: .95, style: 0, use_speaker_boost: true, speed: Math.min(1.1, Math.max(.9, speed)) }
+      : { stability: .4, similarity_boost: .8, style: .2, use_speaker_boost: true, speed } };
     if(/_v2_5$/.test(model)) body.language_code = "fr";
     const p = (async () => {
       let r;
