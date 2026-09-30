@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- CSP: the keys typed in Jarvis can only be sent to the services it really uses -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://api.deepseek.com https://*.workers.dev https://api.elevenlabs.io https://eutils.ncbi.nlm.nih.gov https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com https://cdn.jsdelivr.net; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://api.deepseek.com https://*.workers.dev https://api.elevenlabs.io https://eutils.ncbi.nlm.nih.gov https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0C131C">
 <meta name="color-scheme" content="dark">
@@ -288,8 +288,20 @@ textarea::placeholder{color:var(--ink-3)}
       <select id="tts">
         <option value="ios">Voix de l'iPhone (gratuite)</option>
         <option value="eleven">ElevenLabs (voix humaine)</option>
+        <option value="piper">Voix française hors ligne (Piper, gratuite)</option>
       </select>
     </label>
+    <div id="piperBox">
+      <label>Voix Piper
+        <select id="piperVoice">
+          <option value="fr_FR-siwis-medium">Siwis — femme (conseillée)</option>
+          <option value="fr_FR-upmc-medium">UPMC — autre voix</option>
+          <option value="fr_FR-tom-medium">Tom — homme</option>
+        </select>
+      </label>
+      <button class="iconbtn wide" id="piperLoad" type="button">Télécharger la voix (≈ 60 Mo, une seule fois)</button>
+      <span class="note" style="display:block;padding-block:6px">Synthèse faite sur l'iPhone : gratuite, sans clé et sans internet une fois téléchargée (en Wi-Fi). Si elle échoue, Jarvis reprend la voix de l'iPhone.</span>
+    </div>
     <div id="elBox">
       <label class="stack">Clé API ElevenLabs
         <input id="elKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk_…">
@@ -389,7 +401,7 @@ textarea::placeholder{color:var(--ink-3)}
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
     web: true, persona: "concis", coach: "on", brief: "on", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
     localModel: "Qwen2.5-1.5B-Instruct", localSpec: "sante",
-    tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: "", appleShortcut: "Jarvis Calendrier"
+    tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: "", piperVoice: "fr_FR-siwis-medium", appleShortcut: "Jarvis Calendrier"
   }, store.get("cfg", {}));
   const saveCfg = () => store.set("cfg", cfg);
   // keys carried in the link (#cfg=…, never sent to the server): restores them in any Safari context
@@ -650,12 +662,15 @@ textarea::placeholder{color:var(--ink-3)}
   ["touchend","click","keydown"].forEach(ev => document.addEventListener(ev, unlockAudio, {capture:true, passive:true}));
 
   const useEleven = () => cfg.tts === "eleven" && !!cfg.elKey.trim();
+  const usePiper = () => cfg.tts === "piper";
+  const neural = () => useEleven() || usePiper();          // voices played as audio files through <audio>
+  const fetchVoice = text => useEleven() ? elFetch(text) : piperFetch(text);
   const queue = []; let speaking = false, started = false, ttsGen = 0, elCtl = new AbortController();
   function chunkText(text){
     const clean = speakMath(text).replace(/[*_#`>|]/g,"").replace(/https?:\/\/\S+/g,"").replace(/\[[^\]]*\]\([^)]*\)/g,"").trim();
     // cut only at sentence ends, and keep chunks long: fewer breaks = smoother speech
     const parts = clean.split(/(?<=[.!?…])\s+|\n+/).filter(p => p.trim());
-    const max = useEleven() ? 400 : 240;
+    const max = useEleven() ? 400 : usePiper() ? 200 : 240;
     const out = []; let buf = "";
     for(const p of parts){ if(buf && (buf + " " + p).length > max){ out.push(buf); buf = p; } else buf = buf ? buf + " " + p : p; }
     if(buf.trim()) out.push(buf.trim());
@@ -663,7 +678,7 @@ textarea::placeholder{color:var(--ink-3)}
   }
   function speakAppend(text, force = false){
     if((!cfg.speak && !force) || !text || !text.trim()) return;
-    const eleven = useEleven();
+    const eleven = neural();
     if(!eleven && !synth) return;
     if(!unlocked){   // no touch yet: iOS would stay silent, keep it for the first touch
       pendingSpeech = (pendingSpeech ? pendingSpeech + " " : "") + text.trim();
@@ -672,7 +687,7 @@ textarea::placeholder{color:var(--ink-3)}
     const parts = chunkText(text); if(!parts.length) return;
     setAudioMode("playback");
     queue.push(...parts.map(t => ({ text: t, p: null })));
-    if(eleven && !queue[0].p) queue[0].p = elFetch(queue[0].text);   // start fetching at once
+    if(eleven && !queue[0].p) queue[0].p = fetchVoice(queue[0].text);   // start fetching at once
     if(!speaking){
       speaking = true; started = false; stopListening(); startStopWatch();
       speakNext();
@@ -682,7 +697,7 @@ textarea::placeholder{color:var(--ink-3)}
   function speakNext(){
     if(!queue.length){ speaking = false; stopWatch(); afterSpeech(); return; }
     const item = queue.shift();
-    if(useEleven()) playEleven(item); else speakSynth(item.text);
+    if(neural()) playEleven(item); else speakSynth(item.text);
   }
   function speakSynth(text){
     if(!synth){ speakNext(); return; }
@@ -690,11 +705,36 @@ textarea::placeholder{color:var(--ink-3)}
     const v = voices.find(x => x.voiceURI === cfg.voice); if(v) u.voice = v;
     u.lang = v?.lang || "fr-FR"; u.rate = Number(cfg.rate) || 1.05;
     const gen = ttsGen; let ok = false;
-    u.onstart = () => { ok = started = true; if(!useEleven()) diag.voix = "OK"; setMode("speaking"); };
+    u.onstart = () => { ok = started = true; if(!neural()) diag.voix = "OK"; setMode("speaking"); };
     setTimeout(() => { if(gen === ttsGen && speaking && !ok && !synth.speaking) voiceBlocked(text); }, 3000);
     u.onend = speakNext;
     u.onerror = e => { if(e.error !== "interrupted" && e.error !== "canceled") diag.voix = "erreur : " + e.error; speakNext(); };
     try{ synth.speak(u); }catch{ speakNext(); }
+  }
+
+  // ---- Piper (French neural voice synthesised on the phone, offline once downloaded) ----
+  const PIPER_URL = "https://cdn.jsdelivr.net/npm/@diffusionstudio/vits-web@1.0.3/+esm";   // pinned: dynamic import can't carry SRI
+  let piperLib = null; const piperReady = {};
+  function loadPiper(onProgress){
+    const id = cfg.piperVoice || "fr_FR-siwis-medium";
+    // one shared download per voice, even when several sentences ask for it at once
+    piperReady[id] ||= (async () => {
+      piperLib ||= await import(PIPER_URL).catch(() => { throw new Error("module Piper injoignable (réseau ?)"); });
+      const have = await piperLib.stored().catch(() => []);
+      if(!have.includes(id)) await piperLib.download(id, pr => onProgress?.(pr));
+      return piperLib;
+    })();
+    piperReady[id].catch(() => { delete piperReady[id]; });
+    return piperReady[id];
+  }
+  function piperFetch(text){
+    const p = (async () => {
+      const lib = await loadPiper(pr => { if(pr.total) setMode("thinking", "Téléchargement de la voix… " + Math.round(pr.loaded * 100 / pr.total) + " %"); });
+      const wav = await lib.predict({ text, voiceId: cfg.piperVoice || "fr_FR-siwis-medium" });
+      return URL.createObjectURL(wav);
+    })().catch(e => { throw new Error("Piper : " + (e.message || e)); });
+    p.catch(() => {});
+    return p;
   }
 
   // ---- ElevenLabs (natural voice) ----
@@ -717,8 +757,8 @@ textarea::placeholder{color:var(--ink-3)}
   }
   async function playEleven(item){
     const gen = ttsGen;
-    if(!item.p) item.p = elFetch(item.text);
-    if(queue[0] && !queue[0].p) queue[0].p = elFetch(queue[0].text);   // prefetch the next chunk
+    if(!item.p) item.p = fetchVoice(item.text);
+    if(queue[0] && !queue[0].p) queue[0].p = fetchVoice(queue[0].text);   // prefetch the next chunk
     let url;
     try{ url = await item.p; }
     catch(e){
@@ -729,11 +769,14 @@ textarea::placeholder{color:var(--ink-3)}
     if(gen !== ttsGen){ URL.revokeObjectURL(url); return; }
     const done = () => { URL.revokeObjectURL(url); player.onended = player.onerror = null; if(gen === ttsGen) speakNext(); };
     player.onended = done;
-    player.onerror = () => { diag.voix = "ElevenLabs : lecture impossible"; done(); };
+    const who = usePiper() ? "Piper" : "ElevenLabs";
+    player.onerror = () => { diag.voix = who + " : lecture impossible"; done(); };
     player.src = url;
+    // ElevenLabs takes the speed in its request; Piper's audio is sped up at playback
+    player.playbackRate = usePiper() ? Math.min(1.3, Math.max(.8, Number(cfg.rate) || 1)) : 1;
     try{
       await player.play();
-      started = true; diag.voix = "ElevenLabs OK"; setMode("speaking");
+      started = true; diag.voix = who + " OK"; setMode("speaking");
     }catch{
       player.onended = player.onerror = null; URL.revokeObjectURL(url);
       if(gen !== ttsGen) return;
@@ -1799,8 +1842,16 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec"];
-  const syncTts = () => { $("elBox").hidden = $("tts").value !== "eleven"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = $("tts").value === "eleven"; };
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec","piperVoice"];
+  const syncTts = () => { const t = $("tts").value; $("elBox").hidden = t !== "eleven"; $("piperBox").hidden = t !== "piper"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = t !== "ios"; };
+  $("piperLoad").onclick = async () => {
+    const b = $("piperLoad"); b.disabled = true;
+    try{
+      await loadPiper(pr => { if(pr.total) b.textContent = "Téléchargement… " + Math.round(pr.loaded * 100 / pr.total) + " %"; });
+      b.textContent = "Voix prête ✓"; speak("Bonjour, je suis la voix hors ligne de Jarvis.", true);
+    }catch(e){ b.textContent = "Télécharger la voix (≈ 60 Mo, une seule fois)"; addMsg("sys", "Voix Piper : " + e.message); }
+    b.disabled = false;
+  };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
   function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
   syncPill();
