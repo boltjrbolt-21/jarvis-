@@ -1183,6 +1183,8 @@ textarea::placeholder{color:var(--ink-3)}
       "Si l'utilisateur veut continuer, approfondir ou envoyer quelque chose dans Claude ou claude.ai, utilise show_link avec kind « claude ».",
       lessons ? "Règles d'équipe apprises de tes échanges avec Kévin, à appliquer :\n" + lessons : "",
       pharmaTurn ? "Mode Pharma : cette question demande de la rigueur. Appuie-toi sur search_pubmed, donne une réponse exacte et structurée en 4 à 6 phrases (mécanisme, indications, posologie avec unités, effets indésirables, contre-indications et interactions selon le cas), et dis de vérifier dans le RCP ou le Vidal quand c'est critique." : "",
+      lengthHint ? LENGTH_RULE[lengthHint] : "",
+      routeHint === "insatisfait" ? "Kévin semble insatisfait de ta réponse précédente : reconnais-le simplement, corrige ou précise" + (expert ? ", en consultant ask_expert si besoin." : ".") : "",
       expert && routeHint === "difficile" ? "Le routeur juge cette question difficile : consulte ask_expert avant de répondre." : "",
       expert && forceExpertOnce ? "Kévin a jugé ta réponse précédente insuffisante : pour cette question, consulte obligatoirement ask_expert avant de répondre." : "",
       expert ? "Tu travailles avec un expert plus puissant : pour une question difficile ou importante (santé, médicaments, raisonnement complexe), consulte ask_expert, puis donne sa réponse en l'abrégeant pour l'oral, sans dire que tu l'as consulté sauf si on te le demande." : "",
@@ -1255,26 +1257,45 @@ textarea::placeholder{color:var(--ink-3)}
   const PHARMA_RE = new RegExp(`(?<![${ACC}])(m[ée]dicaments?|traitements?|th[ée]rapeutiques?|posologies?|doses?|dosages?|mg|µg|mcg|comprim[ée]s?|g[ée]lules?|injections?|perfusions?|effets? (?:ind[ée]sirables?|secondaires?)|interactions?|contre[- ]indications?|pharmacodynami[${ACC}]*|pharmacologique|ordonnances?|prescri[${ACC}]*|antibio[${ACC}]*|antalgiques?|anti[- ]?inflammatoires?|antiviraux|antifongiques?|vaccins?|m[ée]canisme d'action|demi[- ]vie|clairance|biodisponibilit[ée]|pharmacocin[ée]tique|toxicit[ée]|surdosage|intoxication|grossesse|allaitement|pathologies?|maladies?|syndromes?|sympt[ôo]mes?|diagnostics?|infections?|cancers?|tumeurs?|diab[èe]te|hypertension|insuffisance [${ACC}]+|enzymes?|r[ée]cepteurs?|biochimie|physiologie|physiopathologie|h[ée]matologie|immunologie|microbiologie|bact[ée]ries?|virus|gal[ée]nique|RCP|Vidal|DCI|AMM|[${ACC}]+(?:cilline|mycine|cycline|oxacine|conazole|prazole|pril|sartan|olol|dipine|statine|mab|tinib|ciclovir|navir|tidine|parine|s[ée]mide|thiazide|z[ée]pam|zolam|triptan|coxib|prof[èe]ne|f[ée]nac|lukast|gliptine|flozine|glitazone|ca[ïi]ne|s[ée]tron|trexate|platine|rubicine))(?![${ACC}])`, "i");
   let pharmaTurn = false;
   // ---- Jev (TypeSafe) router: a fast decision model picks who should answer; regex rules stay as the fallback ----
-  let routeHint = "";
-  async function routeJev(text){
-    const ctl2 = new AbortController(); const tmo = setTimeout(() => ctl2.abort(), 2500);
+  let routeHint = "", lengthHint = "";
+  async function jev(state, questions, ms = 2500){
+    const ctl2 = new AbortController(); const tmo = setTimeout(() => ctl2.abort(), ms);
     try{
-      const prev = turns.filter(t => !t.hidden).slice(-3, -1).map(t => (t.role === "user" ? "Kévin : " : "Jarvis : ") + String(t.content).slice(0, 300));
       const r = await fetch("https://api.typesafe.ai/v1/systemone", { method:"POST", signal: ctl2.signal,
         headers:{ "content-type":"application/json", "authorization":"Bearer " + cfg.tsKey.trim() },
-        body: JSON.stringify({ model:"jev-latest", state:{ demande: text, echange_precedent: prev }, questions:{ route:{ type:"choice",
-          instructions:"Kévin, étudiant en pharmacie, parle à son assistant vocal. Quel traitement sa demande nécessite-t-elle ?",
-          criteria:{ simple:"Conversation, commande (minuteur, note, rappel, rendez-vous), coaching, question simple ou d'actualité",
-            sante:"Médicament, dose, pathologie, symptôme, pharmacologie, biologie ou médecine : exige rigueur et sources",
-            difficile:"Raisonnement complexe, calcul délicat, conseil important ou rédaction longue, hors santé" } } } }) });
+        body: JSON.stringify({ model:"jev-latest", state, questions }) });
       if(!r.ok){ diag.routeur = "TypeSafe : erreur " + r.status; return null; }
-      const a = (await r.json()).answers?.route;
-      if(!a?.choice) return null;
-      diag.routeur = `${a.choice} (${Math.round((a.confidence ?? 0) * 100)} %)`;
-      return a;
+      return (await r.json()).answers || null;
     }catch(e){ diag.routeur = e.name === "AbortError" ? "TypeSafe : trop lent, règles locales" : "TypeSafe injoignable, règles locales"; return null; }
     finally{ clearTimeout(tmo); }
   }
+  async function routeJev(text){
+    const prevTurns = turns.filter(t => !t.hidden).slice(-3, -1);
+    const prev = prevTurns.map(t => (t.role === "user" ? "Kévin : " : "Jarvis : ") + String(t.content).slice(0, 300));
+    const questions = {
+      route:{ type:"choice", instructions:"Kévin, étudiant en pharmacie, parle à son assistant vocal. Quel traitement sa demande nécessite-t-elle ?",
+        criteria:{ simple:"Conversation, commande (minuteur, note, rappel, rendez-vous), coaching, question simple ou d'actualité",
+          sante:"Médicament, dose, pathologie, symptôme, pharmacologie, biologie ou médecine : exige rigueur et sources",
+          difficile:"Raisonnement complexe, calcul délicat, conseil important ou rédaction longue, hors santé" } },
+      longueur:{ type:"choice", instructions:"Quelle longueur de réponse orale sert le mieux cette demande ?",
+        criteria:{ court:"Une ou deux phrases suffisent", moyen:"Trois à cinq phrases", detaille:"Une explication détaillée, en étapes" } }
+    };
+    if(prevTurns.some(t => t.role === "assistant")) questions.avis = { type:"choice", instructions:"Que dit la nouvelle demande de Kévin sur la réponse précédente de Jarvis ?",
+      criteria:{ satisfait:"Il remercie, approuve ou enchaîne sur la suite", insatisfait:"Il signale une erreur, un manque, un malentendu ou redemande la même chose", neutre:"Aucun avis sur la réponse précédente" } };
+    const ans = await jev({ demande: text, echange_precedent: prev }, questions);
+    const a = ans?.route;
+    if(!a?.choice) return null;
+    diag.routeur = `${a.choice} (${Math.round((a.confidence ?? 0) * 100)} %)` + (ans.longueur?.choice ? " · " + ans.longueur.choice : "");
+    return { ...a, longueur: ans.longueur, avis: ans.avis };
+  }
+  // after a fast answer: Jev checks it; a clearly incomplete or wrong answer is redone by the expert
+  async function judgeJev(question, answer){
+    const ans = await jev({ question, reponse: answer }, { correcte:{ type:"noul",
+      instructions:"Cette réponse répond-elle correctement et complètement à la question, sans erreur évidente ni affirmation douteuse ?",
+      criteria:{ true:"Réponse juste, complète et utile", false:"Réponse fausse, incomplète, évasive ou hors sujet" } } }, 3000);
+    return typeof ans?.correcte?.noul === "number" ? ans.correcte.noul : null;
+  }
+  const LENGTH_RULE = { court:"Réponds en une ou deux phrases.", moyen:"Réponds en trois à cinq phrases.", detaille:"Donne une réponse détaillée, structurée en étapes courtes et claires." };
   const needsPharma = text => cfg.pharma === "on" || (cfg.pharma !== "off" && PHARMA_RE.test(text));
   const PHARMA_EXPERT = [
     "Tu es un expert en pharmacie et en pharmacologie, consulté par Jarvis pour Kévin, étudiant en pharmacie à Dijon. Exigence absolue : l'exactitude.",
@@ -1313,7 +1334,7 @@ textarea::placeholder{color:var(--ink-3)}
     const prior = (history || []).slice(-9, -1).filter(m => typeof m.content === "string");
     while(prior.length && prior[0].role !== "user") prior.shift();
     const messages = [...prior, { role:"user", content: question }];
-    const system = PHARMA_EXPERT + (lessons ? "\nRègles apprises : " + lessons.split("\n").join(" ") : "") + (memories.length ? "\nContexte sur Kévin : " + memories.slice(-20).join(" ; ") : "");
+    const system = PHARMA_EXPERT + (lengthHint === "court" ? "\nKévin veut une réponse courte : 2 à 3 phrases, l'essentiel seulement." : lengthHint === "detaille" ? "\nKévin veut une réponse détaillée : tu peux aller jusqu'à 10 phrases." : "") + (lessons ? "\nRègles apprises : " + lessons.split("\n").join(" ") : "") + (memories.length ? "\nContexte sur Kévin : " + memories.slice(-20).join(" ; ") : "");
     const tools = [{ name: PUBMED_TOOL.name, description: PUBMED_TOOL.description, input_schema: PUBMED_TOOL.parameters }];
     for(let round = 0; round < 5; round++){
       let resp;
@@ -1826,10 +1847,18 @@ textarea::placeholder{color:var(--ink-3)}
       setMode("thinking", "Analyse de la question…");
       route = await routeJev(requestText);
     }
+    lengthHint = "";
     if(route && (route.confidence ?? 1) >= .5){
       pharmaTurn = !img && route.choice === "sante";
       if(route.choice === "difficile") routeHint = "difficile";
     }else pharmaTurn = !img && needsPharma(requestText);
+    if(route?.longueur?.choice && (route.longueur.confidence ?? 1) >= .5) lengthHint = route.longueur.choice;
+    // implicit feedback: Jev reads Kévin's reaction to the previous answer and feeds the learning loop
+    const lastJ = journal[journal.length-1];
+    if(route?.avis && lastJ && !lastJ.fb && Date.now() - lastJ.t < 15*60000 && (route.avis.confidence ?? 0) >= .7){
+      if(route.avis.choice === "insatisfait"){ rate(lastJ.id, -1); routeHint ||= "insatisfait"; }
+      else if(route.avis.choice === "satisfait") rate(lastJ.id, 1);
+    }
     pubmedRefs = [];
     const pharmaExpert = pharmaTurn && !forcedExpert && expertAvailable() && navigator.onLine !== false;
     currentMsg = addMsg("bot", "…", { cls:"thinking", who: forcedExpert ? "Jarvis · Expert " + expertName() : "Jarvis · " + PROV_LABEL[provider] });
@@ -1915,6 +1944,21 @@ textarea::placeholder{color:var(--ink-3)}
       setBusy(false);
       speakAppend(out.slice(Math.min(spokenUpTo, out.length)));
       if(!speaking) afterSpeech();
+      // Jev quality check: only for fast answers (the expert's own answers are not re-checked), never for hidden or local ones
+      if(cfg.tsKey.trim() && !opts.hidden && !forcedExpert && !pharmaExpert && !usedExpert && usedBy !== "local" && expertAvailable() && navigator.onLine !== false && out.length > 40){
+        const jid = currentMsg.dataset.jid, msgEl = currentMsg;
+        judgeJev(requestText, out).then(async score => {
+          if(score === null) return;
+          diag.routeur = (diag.routeur || "") + ` · contrôle ${Math.round(score * 100)} %`;
+          if(score >= .3 || busy) return;
+          const tag = document.createElement("div"); tag.className = "tools"; tag.textContent = "↳ Jev juge cette réponse insuffisante : l'expert reprend";
+          msgEl.append(tag);
+          rate(jid, -1);
+          for(let i = 0; i < 120 && (speaking || busy); i++) await new Promise(r => setTimeout(r, 500));   // let the first answer finish
+          if(busy) return;
+          forceExpertOnce = true; send(requestText, { hidden: true });
+        });
+      }
     }catch(e){
       setBusy(false); forceExpertOnce = false;
       currentMsg.classList.remove("thinking");
