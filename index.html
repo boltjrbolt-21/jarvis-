@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <!-- CSP: the keys typed in Jarvis can only be sent to the services it really uses -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://api.deepseek.com https://*.workers.dev https://api.elevenlabs.io https://eutils.ncbi.nlm.nih.gov https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self' https://api.anthropic.com https://api.deepseek.com https://*.workers.dev https://api.elevenlabs.io https://eutils.ncbi.nlm.nih.gov https://api.typesafe.ai https://huggingface.co https://*.huggingface.co https://*.hf.co https://raw.githubusercontent.com https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; worker-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="theme-color" content="#0C131C">
 <meta name="color-scheme" content="dark">
@@ -273,6 +273,10 @@ textarea::placeholder{color:var(--ink-3)}
       </select>
     </label>
     <span class="note" style="display:block;padding-block:6px">Médicaments, doses, pathologies, pharmacologie : l'expert répond lui-même, avec une méthode rigoureuse et des articles PubMed cités sous la réponse. À la voix : « active / désactive le mode pharma ».</span>
+    <label class="stack">Clé API TypeSafe (routeur Jev, optionnel)
+      <input id="tsKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="clé TypeSafe">
+      <span class="note">À créer sur <a href="https://console.typesafe.ai/keys" target="_blank" rel="noopener">console.typesafe.ai</a>. Jev, un modèle de décision très rapide, lit chaque question et choisit qui doit répondre : réponse rapide, mode Pharma ou expert. Sans clé, ou s'il ne répond pas, Jarvis décide comme avant.</span>
+    </label>
     <label>Recherche web
       <select id="webSel"><option value="1">Activée</option><option value="0">Désactivée</option></select>
     </label>
@@ -414,7 +418,7 @@ textarea::placeholder{color:var(--ink-3)}
 
   // ================= state =================
   const cfg = Object.assign({
-    provider: "auto", expert: "claude-sonnet-5", pharma: "auto", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
+    provider: "auto", expert: "claude-sonnet-5", pharma: "auto", tsKey: "", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com",
     web: true, persona: "concis", coach: "on", brief: "on", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
     localModel: "Qwen2.5-1.5B-Instruct", localSpec: "sante",
@@ -443,8 +447,9 @@ textarea::placeholder{color:var(--ink-3)}
     if(pack.c) cfg.claudeKey = pack.c;
     if(pack.d) cfg.dsKey = pack.d;
     if(pack.e) cfg.elKey = pack.e;
+    if(pack.t) cfg.tsKey = pack.t;
     if(pack.b) cfg.dsBase = pack.b;
-    saveCfg(); return !!(pack.c || pack.d || pack.e);
+    saveCfg(); return !!(pack.c || pack.d || pack.e || pack.t);
   }
   // accepts the protected link (cfgx=…, asks for the code) and the older plain link (cfg=…)
   async function importKeys(str){
@@ -486,7 +491,7 @@ textarea::placeholder{color:var(--ink-3)}
   let turns = store.get("turns", []);           // [{role, content(string)}]
   let timers = [];
   let busy = false, ctl = null, pendingImg = null, mode = "idle";
-  const diag = { modèle:"—", internet:"—", micro:"—", caméra:"—", enregistrement:"—", calendrier:"pont non testé", voix:"—", dernier:"aucun envoi" };
+  const diag = { modèle:"—", internet:"—", micro:"—", caméra:"—", routeur:"—", enregistrement:"—", calendrier:"pont non testé", voix:"—", dernier:"aucun envoi" };
 
   const fmtLeft = ms => { const s = Math.max(0, Math.round(ms/1000)); const h = Math.floor(s/3600), m = Math.floor(s%3600/60), x = s%60; return (h ? h+":"+String(m).padStart(2,"0") : m) + ":" + String(x).padStart(2,"0"); };
   const nowLong = () => new Date().toLocaleString("fr-FR",{weekday:"long",day:"numeric",month:"long",year:"numeric",hour:"2-digit",minute:"2-digit"});
@@ -1178,6 +1183,7 @@ textarea::placeholder{color:var(--ink-3)}
       "Si l'utilisateur veut continuer, approfondir ou envoyer quelque chose dans Claude ou claude.ai, utilise show_link avec kind « claude ».",
       lessons ? "Règles d'équipe apprises de tes échanges avec Kévin, à appliquer :\n" + lessons : "",
       pharmaTurn ? "Mode Pharma : cette question demande de la rigueur. Appuie-toi sur search_pubmed, donne une réponse exacte et structurée en 4 à 6 phrases (mécanisme, indications, posologie avec unités, effets indésirables, contre-indications et interactions selon le cas), et dis de vérifier dans le RCP ou le Vidal quand c'est critique." : "",
+      expert && routeHint === "difficile" ? "Le routeur juge cette question difficile : consulte ask_expert avant de répondre." : "",
       expert && forceExpertOnce ? "Kévin a jugé ta réponse précédente insuffisante : pour cette question, consulte obligatoirement ask_expert avant de répondre." : "",
       expert ? "Tu travailles avec un expert plus puissant : pour une question difficile ou importante (santé, médicaments, raisonnement complexe), consulte ask_expert, puis donne sa réponse en l'abrégeant pour l'oral, sans dire que tu l'as consulté sauf si on te le demande." : "",
       cfg.coach !== "off" ? COACH + "\n" + goalsBrief() : "",
@@ -1248,6 +1254,27 @@ textarea::placeholder{color:var(--ink-3)}
   const ACC = "\\wÀ-ÿ";
   const PHARMA_RE = new RegExp(`(?<![${ACC}])(m[ée]dicaments?|traitements?|th[ée]rapeutiques?|posologies?|doses?|dosages?|mg|µg|mcg|comprim[ée]s?|g[ée]lules?|injections?|perfusions?|effets? (?:ind[ée]sirables?|secondaires?)|interactions?|contre[- ]indications?|pharmacodynami[${ACC}]*|pharmacologique|ordonnances?|prescri[${ACC}]*|antibio[${ACC}]*|antalgiques?|anti[- ]?inflammatoires?|antiviraux|antifongiques?|vaccins?|m[ée]canisme d'action|demi[- ]vie|clairance|biodisponibilit[ée]|pharmacocin[ée]tique|toxicit[ée]|surdosage|intoxication|grossesse|allaitement|pathologies?|maladies?|syndromes?|sympt[ôo]mes?|diagnostics?|infections?|cancers?|tumeurs?|diab[èe]te|hypertension|insuffisance [${ACC}]+|enzymes?|r[ée]cepteurs?|biochimie|physiologie|physiopathologie|h[ée]matologie|immunologie|microbiologie|bact[ée]ries?|virus|gal[ée]nique|RCP|Vidal|DCI|AMM|[${ACC}]+(?:cilline|mycine|cycline|oxacine|conazole|prazole|pril|sartan|olol|dipine|statine|mab|tinib|ciclovir|navir|tidine|parine|s[ée]mide|thiazide|z[ée]pam|zolam|triptan|coxib|prof[èe]ne|f[ée]nac|lukast|gliptine|flozine|glitazone|ca[ïi]ne|s[ée]tron|trexate|platine|rubicine))(?![${ACC}])`, "i");
   let pharmaTurn = false;
+  // ---- Jev (TypeSafe) router: a fast decision model picks who should answer; regex rules stay as the fallback ----
+  let routeHint = "";
+  async function routeJev(text){
+    const ctl2 = new AbortController(); const tmo = setTimeout(() => ctl2.abort(), 2500);
+    try{
+      const prev = turns.filter(t => !t.hidden).slice(-3, -1).map(t => (t.role === "user" ? "Kévin : " : "Jarvis : ") + String(t.content).slice(0, 300));
+      const r = await fetch("https://api.typesafe.ai/v1/systemone", { method:"POST", signal: ctl2.signal,
+        headers:{ "content-type":"application/json", "authorization":"Bearer " + cfg.tsKey.trim() },
+        body: JSON.stringify({ model:"jev-latest", state:{ demande: text, echange_precedent: prev }, questions:{ route:{ type:"choice",
+          instructions:"Kévin, étudiant en pharmacie, parle à son assistant vocal. Quel traitement sa demande nécessite-t-elle ?",
+          criteria:{ simple:"Conversation, commande (minuteur, note, rappel, rendez-vous), coaching, question simple ou d'actualité",
+            sante:"Médicament, dose, pathologie, symptôme, pharmacologie, biologie ou médecine : exige rigueur et sources",
+            difficile:"Raisonnement complexe, calcul délicat, conseil important ou rédaction longue, hors santé" } } } }) });
+      if(!r.ok){ diag.routeur = "TypeSafe : erreur " + r.status; return null; }
+      const a = (await r.json()).answers?.route;
+      if(!a?.choice) return null;
+      diag.routeur = `${a.choice} (${Math.round((a.confidence ?? 0) * 100)} %)`;
+      return a;
+    }catch(e){ diag.routeur = e.name === "AbortError" ? "TypeSafe : trop lent, règles locales" : "TypeSafe injoignable, règles locales"; return null; }
+    finally{ clearTimeout(tmo); }
+  }
   const needsPharma = text => cfg.pharma === "on" || (cfg.pharma !== "off" && PHARMA_RE.test(text));
   const PHARMA_EXPERT = [
     "Tu es un expert en pharmacie et en pharmacologie, consulté par Jarvis pour Kévin, étudiant en pharmacie à Dijon. Exigence absolue : l'exactitude.",
@@ -1792,12 +1819,22 @@ textarea::placeholder{color:var(--ink-3)}
     }
 
     const forcedExpert = forceExpertOnce && expertAvailable();
-    pharmaTurn = !img && needsPharma(requestText);
+    // Jev decides the route when a TypeSafe key is set; otherwise (or if it fails) the keyword rules do
+    routeHint = "";
+    let route = null;
+    if(!img && !forcedExpert && cfg.tsKey.trim() && cfg.pharma === "auto" && navigator.onLine !== false){
+      setMode("thinking", "Analyse de la question…");
+      route = await routeJev(requestText);
+    }
+    if(route && (route.confidence ?? 1) >= .5){
+      pharmaTurn = !img && route.choice === "sante";
+      if(route.choice === "difficile") routeHint = "difficile";
+    }else pharmaTurn = !img && needsPharma(requestText);
     pubmedRefs = [];
     const pharmaExpert = pharmaTurn && !forcedExpert && expertAvailable() && navigator.onLine !== false;
     currentMsg = addMsg("bot", "…", { cls:"thinking", who: forcedExpert ? "Jarvis · Expert " + expertName() : "Jarvis · " + PROV_LABEL[provider] });
     const txt = currentMsg.querySelector(".txt");
-    toolLog = []; setBusy(true); setMode("thinking", "Réflexion…");
+    toolLog = route ? ["routeur Jev : " + route.choice] : []; setBusy(true); setMode("thinking", "Réflexion…");
     ctl = new AbortController();
     let spokenUpTo = 0;
     const onText = full => {
@@ -1903,7 +1940,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec","piperVoice"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec","piperVoice","tsKey"];
   const syncTts = () => { const t = $("tts").value; $("elBox").hidden = t !== "eleven"; $("piperBox").hidden = t !== "piper"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = t !== "ios"; };
   $("piperLoad").onclick = async () => {
     const b = $("piperLoad"); b.disabled = true;
@@ -2005,7 +2042,7 @@ textarea::placeholder{color:var(--ink-3)}
   });
   const INSTALL_MSG = "Maintenant : touche Partager › Sur l'écran d'accueil › Ajouter. L'icône gardera tes clés, même si tu la supprimes puis la réinstalles de la même façon.";
   async function keysLink(){
-    const pack = { c: cfg.claudeKey.trim(), d: cfg.dsKey.trim(), e: cfg.elKey.trim(), ...(cfg.dsBase && cfg.dsBase !== "https://api.deepseek.com" ? { b: cfg.dsBase } : {}) };
+    const pack = { c: cfg.claudeKey.trim(), d: cfg.dsKey.trim(), e: cfg.elKey.trim(), ...(cfg.tsKey.trim() ? { t: cfg.tsKey.trim() } : {}), ...(cfg.dsBase && cfg.dsBase !== "https://api.deepseek.com" ? { b: cfg.dsBase } : {}) };
     if(!pack.c && !pack.d && !pack.e){ addMsg("sys", "Colle d'abord au moins une clé."); return ""; }
     const pin = prompt("Choisis un code pour protéger ce lien (au moins 6 caractères). Il te sera demandé si Jarvis doit remettre tes clés :");
     if(pin === null) return "";
