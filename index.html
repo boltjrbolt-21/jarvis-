@@ -234,6 +234,21 @@ textarea::placeholder{color:var(--ink-3)}
         <option value="deepseek">DeepSeek</option>
         <option value="meta">Meta AI (Muse Spark)</option>
         <option value="local">Local (sur l'iPhone, sans internet)</option>
+        <option value="lueur">Lueur (ton PC : Gemma + tes cours, gratuit)</option>
+      </select>
+    </label>
+    <label class="stack">Adresse de Lueur
+      <input id="lueurUrl" type="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://msi.….ts.net">
+      <span class="note">L'adresse Tailscale de ton PC. Tailscale doit être allumé sur l'iPhone. Sans clé Claude, Jarvis répond avec Lueur.</span>
+    </label>
+    <label class="stack">Jeton Lueur
+      <input id="lueurKey" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="LUEUR_JETON_JARVIS du fichier lueur/.env">
+    </label>
+    <label>Modèle Lueur
+      <select id="lueurModel">
+        <option value="local:gemma4:12b">Gemma 12B (rapide)</option>
+        <option value="local:gemma4-12b-boost">Gemma 12B Boost</option>
+        <option value="local:gemma4-boost">Gemma 26B Boost (le plus fort, plus lent)</option>
       </select>
     </label>
     <label class="stack">Clé API Claude
@@ -429,6 +444,7 @@ textarea::placeholder{color:var(--ink-3)}
     provider: "auto", expert: "claude-sonnet-5", pharma: "auto", tsKey: "", claudeKey: "", claudeModel: "claude-haiku-4-5-20251001",
     dsKey: "", dsModel: "deepseek-v4-flash", dsBase: "https://api.deepseek.com", metaKey: "", metaModel: "muse-spark-1.3",
     web: true, persona: "concis", coach: "on", brief: "on", voice: "", rate: "1.05", silence: "1100", speak: true, autoListen: "0", stopWord: "1",
+    lueurUrl: "", lueurKey: "", lueurModel: "local:gemma4:12b",
     localModel: "Qwen2.5-1.5B-Instruct", localSpec: "sante",
     tts: "ios", elKey: "", elModel: "eleven_flash_v2_5", elVoice: "", piperVoice: "fr_FR-siwis-medium", appleShortcut: "Jarvis Calendrier"
   }, store.get("cfg", {}));
@@ -458,7 +474,9 @@ textarea::placeholder{color:var(--ink-3)}
     if(pack.t) cfg.tsKey = pack.t;
     if(pack.b) cfg.dsBase = pack.b;
     if(pack.m) cfg.metaKey = pack.m;
-    saveCfg(); return !!(pack.c || pack.d || pack.e || pack.t || pack.m);
+    if(pack.l) cfg.lueurUrl = pack.l;
+    if(pack.k) cfg.lueurKey = pack.k;
+    saveCfg(); return !!(pack.c || pack.d || pack.e || pack.t || pack.m || pack.k);
   }
   // accepts the protected link (cfgx=…, asks for the code) and the older plain link (cfg=…)
   async function importKeys(str){
@@ -480,7 +498,8 @@ textarea::placeholder{color:var(--ink-3)}
       return ok;
     }catch{ return false; }
   }
-  const hasKeys = () => !!(cfg.claudeKey.trim() || cfg.dsKey.trim() || cfg.metaKey.trim() || cfg.elKey.trim());
+  const hasKeys = () => !!(cfg.claudeKey.trim() || cfg.dsKey.trim() || cfg.metaKey.trim() || cfg.elKey.trim() || cfg.lueurKey.trim());
+  const lueurOn = () => !!(cfg.lueurUrl.trim() && cfg.lueurKey.trim());
   // "keep" = install mode: the (encrypted) keys stay in the address so the home-screen icon is created with them
   // and puts them back when its storage is empty (a deleted then re-added icon starts from scratch)
   const keysImport = (async () => {
@@ -1506,24 +1525,77 @@ textarea::placeholder{color:var(--ink-3)}
   }
 
   // ---- Local model (WebLLM on WebGPU): runs on the phone, no key, works offline once downloaded ----
-  const PROV_LABEL = { auto:"Auto", claude:"Claude", deepseek:"DeepSeek", meta:"Meta", local:"Local" };
+  const PROV_LABEL = { auto:"Auto", claude:"Claude", deepseek:"DeepSeek", meta:"Meta", local:"Local", lueur:"Lueur" };
+
+  // ---- Lueur: Kévin's PC (Gemma + his indexed courses) reached through Tailscale; no paid key ----
+  const COURS_RE = /\b(cours|cm\s*\d*|qcm|qroc|fiche|r[ée]vis\w*|partiel|exam\w*|ue\s*\d|chapitre)\b/i;
+  // Lueur writes markdown for a screen: links and images become plain words for the voice
+  // Lueur's inner monologue <pensee>…</pensee> (same parsing as Lueur's own page) is never shown nor spoken
+  function lueurVisible(t){
+    if("<pensee>".startsWith(t.trimStart())) return "";
+    const m = /^\s*<pens[ée]e>([\s\S]*?)((?:<\/[\wé]*[>#]?\s*)+|\n\s*\n|$)/.exec(t);
+    if(m) t = m[2] ? t.slice(m[0].length) : "";
+    else { const o = /^\s*([^<\n]{1,600}?)((?:<\/(?:pens[\wé]*|p)[>#]?\s*)+)/.exec(t); if(o) t = t.slice(o[0].length); }
+    return t.replace(/<(souvenir|consignes)>[\s\S]*?(?:<\/\1>|$)/g, "").replace(/<\/?pens[ée]e>/g, "").trimStart();
+  }
+  const lueurPlain = s => lueurVisible(s).replace(/!\[[^\]]*\]\([^)]*\)/g, "").replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").replace(/\[(\d+)\]/g, "").replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*]+)\*\*/g, "$1");
+  async function runLueur(history, onText, signal, img){
+    const last = history[history.length-1];
+    const direct = typeof last?.content === "string" && !img ? localCommand(last.content) : null;
+    if(direct){ onText(direct); return direct; }
+    const messages = history.slice(-12).map(m => ({ role: m.role, content: typeof m.content === "string" ? m.content : "" })).filter(m => m.content);
+    if(img) messages[messages.length-1].images = [(await fileToB64(img)).data];
+    const id = "jarvis-" + crypto.randomUUID();
+    const consignes = [
+      "Tu réponds à travers Jarvis, l'assistant vocal de Kévin : tes réponses sont lues à voix haute. Tutoie-le, va droit au but, phrases naturelles, pas de tableau. Garde une liste ou un QCM seulement s'il le demande.",
+      memories.length ? "Ce que tu sais de Kévin : " + memories.slice(-30).join(" ; ") : ""
+    ].filter(Boolean).join("\n");
+    const base = cfg.lueurUrl.trim().replace(/\/+$/, "");
+    let resp;
+    try{
+      resp = await fetch(base + "/api/chat", { method:"POST", signal,
+        headers:{ "content-type":"application/json", "authorization":"Bearer " + cfg.lueurKey.trim() },
+        body: JSON.stringify({ id, messages, provider: cfg.lueurModel, search: cfg.web, consignes }) });
+    }catch(err){ if(err.name === "AbortError") throw err; throw new Error("Lueur injoignable : le PC est-il allumé, et Tailscale actif sur l'iPhone ?"); }
+    if(!resp.ok) throw new Error("Lueur : " + (resp.status === 403 ? "jeton refusé — vérifie-le dans les réglages" : "erreur " + resp.status));
+    const stop = () => fetch(base + "/api/arreter", { method:"POST", headers:{ "content-type":"application/json", "authorization":"Bearer " + cfg.lueurKey.trim() }, body: JSON.stringify({ id }) }).catch(() => {});
+    signal.addEventListener("abort", stop, { once: true });
+    let full = "";
+    try{
+      for await (const d of sse(resp)){
+        let ev; try{ ev = JSON.parse(d); }catch{ continue; }
+        if(ev.type === "text"){ full += ev.v; onText(lueurPlain(full)); }
+        else if(ev.type === "status") setMode("thinking", String(ev.v).slice(0, 90));
+        else if(ev.type === "error") throw new Error("Lueur : " + ev.v);
+        else if(ev.type === "done") break;
+      }
+    }finally{ signal.removeEventListener("abort", stop); }
+    diag.lueur = "OK · " + cfg.lueurModel.replace(/^local:/, "");
+    return lueurPlain(full);
+  }
   const localReady = () => !!llm || !!store.get("localReady", null);
 
   // ---- Auto: the team. Free local commands first, then Claude (with its expert), DeepSeek as backup, local model when offline ----
-  async function runAuto(textHistory, claudeHistory, onText, signal, hasImg){
+  async function runAuto(textHistory, claudeHistory, onText, signal, img){
+    const hasImg = !!img;
     const last = textHistory[textHistory.length-1]?.content;
     if(typeof last === "string" && !hasImg){ const d = localCommand(last); if(d){ onText(d); return { out: d, by: "local" }; } }
     const online = navigator.onLine !== false;
     const chain = [];
+    // course questions go to Lueur first: it has Kévin's indexed courses; otherwise it is the free backup
+    const coursQ = online && lueurOn() && typeof last === "string" && COURS_RE.test(last);
+    if(coursQ) chain.push("lueur");
     if(online && cfg.claudeKey.trim()) chain.push("claude");
     if(online && cfg.dsKey.trim() && !hasImg) chain.push("deepseek");
     if(online && cfg.metaKey.trim() && !hasImg) chain.push("meta");
+    if(online && lueurOn() && !coursQ) chain.push("lueur");
     if(localReady() && !hasImg) chain.push("local");
-    if(!chain.length) throw new Error(online ? "Aucun modèle disponible : ajoute une clé Claude, DeepSeek ou Meta, ou télécharge le modèle local." : "Pas de réseau et le modèle local n'est pas téléchargé (Réglages › Modèle local, en Wi-Fi).");
+    if(!chain.length) throw new Error(online ? "Aucun modèle disponible : ajoute une clé Claude, DeepSeek ou Meta, branche Lueur, ou télécharge le modèle local." : "Pas de réseau et le modèle local n'est pas téléchargé (Réglages › Modèle local, en Wi-Fi).");
     let lastErr;
     for(const p of chain){
       try{
-        const out = p === "claude" ? await runClaude(claudeHistory.slice(), onText, signal)
+        const out = p === "lueur" ? await runLueur(textHistory.slice(), onText, signal, img)
+                  : p === "claude" ? await runClaude(claudeHistory.slice(), onText, signal)
                   : p === "deepseek" ? await runDeepSeek(textHistory.slice(), onText, signal)
                   : p === "meta" ? await runMeta(textHistory.slice(), onText, signal)
                   : await runLocal(textHistory.slice(), onText, signal);
@@ -1790,7 +1862,8 @@ textarea::placeholder{color:var(--ink-3)}
     if(cfg.provider === "deepseek" && !cfg.dsKey.trim()) return "Ajoute ta clé DeepSeek dans les réglages (bouton en haut à droite).";
     if(cfg.provider === "meta" && !cfg.metaKey.trim()) return "Ajoute ta clé Meta AI dans les réglages (bouton en haut à droite).";
     if(cfg.provider === "claude" && !cfg.claudeKey.trim()) return "Ajoute ta clé Claude dans les réglages (bouton en haut à droite).";
-    if(cfg.provider === "auto" && !cfg.claudeKey.trim() && !cfg.dsKey.trim() && !cfg.metaKey.trim() && !localReady()) return "Ajoute une clé Claude, DeepSeek ou Meta dans les réglages, ou télécharge le modèle local.";
+    if(cfg.provider === "lueur" && !lueurOn()) return "Colle l'adresse et le jeton de Lueur dans les réglages (bouton en haut à droite).";
+    if(cfg.provider === "auto" && !cfg.claudeKey.trim() && !cfg.dsKey.trim() && !cfg.metaKey.trim() && !lueurOn() && !localReady()) return "Ajoute une clé Claude, DeepSeek ou Meta dans les réglages, branche Lueur, ou télécharge le modèle local.";
     // local needs no key
     return null;
   }
@@ -1936,7 +2009,7 @@ textarea::placeholder{color:var(--ink-3)}
           const b = await fileToB64(img);
           claudeHistory[claudeHistory.length-1] = { role:"user", content:[ { type:"image", source:{ type:"base64", ...b } }, { type:"text", text:requestText } ] };
         }
-        const r = await runAuto(history, claudeHistory, onText, ctl.signal, !!img);
+        const r = await runAuto(history, claudeHistory, onText, ctl.signal, img);
         out = r.out; usedBy = r.by;
         currentMsg.querySelector(".who").textContent = "Jarvis · " + PROV_LABEL[r.by] + (toolLog.some(x => x.startsWith("expert")) ? " + expert " + expertName() : "");
       }else if(provider === "claude"){
@@ -1947,6 +2020,8 @@ textarea::placeholder{color:var(--ink-3)}
         out = await runClaude(history, onText, ctl.signal);
       }else if(provider === "local"){
         out = await runLocal(history, onText, ctl.signal);
+      }else if(provider === "lueur"){
+        out = await runLueur(history, onText, ctl.signal, img);
       }else if(provider === "meta"){
         out = await runMeta(history, onText, ctl.signal);
       }else{
@@ -1961,7 +2036,7 @@ textarea::placeholder{color:var(--ink-3)}
       if(usedExpert && !forcedExpert && !pharmaExpert) currentMsg.querySelector(".who").textContent = "Jarvis · " + PROV_LABEL[usedBy] + " + expert " + expertName();
       currentMsg.dataset.jid = logExchange(requestText, out, usedBy, usedExpert, performance.now() - t0);
       forceExpertOnce = false;
-      diag.modèle = (usedExpert ? cfg.expert : usedBy === "claude" ? cfg.claudeModel : usedBy === "local" ? (llmId || cfg.localModel) : usedBy === "meta" ? cfg.metaModel : cfg.dsModel) + (provider === "auto" && !forcedExpert ? " (auto)" : "") + " · OK";
+      diag.modèle = (usedExpert ? cfg.expert : usedBy === "claude" ? cfg.claudeModel : usedBy === "local" ? (llmId || cfg.localModel) : usedBy === "lueur" ? cfg.lueurModel :usedBy === "meta" ? cfg.metaModel : cfg.dsModel) + (provider === "auto" && !forcedExpert ? " (auto)" : "") + " · OK";
       diag.dernier = `${new Date().toLocaleTimeString("fr-FR")} · ${((performance.now()-t0)/1000).toFixed(1)} s`;
       if(toolLog.length){ const d = document.createElement("div"); d.className = "tools"; d.textContent = "↳ " + [...new Set(toolLog)].join(" · "); currentMsg.append(d); }
       setBusy(false);
@@ -2007,7 +2082,7 @@ textarea::placeholder{color:var(--ink-3)}
   $("pdel").onclick = clearImg;
 
   // ================= settings =================
-  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec","piperVoice","tsKey","metaKey","metaModel"];
+  const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec","piperVoice","tsKey","metaKey","metaModel","lueurUrl","lueurKey","lueurModel"];
   const syncTts = () => { const t = $("tts").value; $("elBox").hidden = t !== "eleven"; $("piperBox").hidden = t !== "piper"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = t !== "ios"; };
   $("piperLoad").onclick = async () => {
     const b = $("piperLoad"); b.disabled = true;
@@ -2018,7 +2093,7 @@ textarea::placeholder{color:var(--ink-3)}
     b.disabled = false;
   };
   $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
-  function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "meta" ? cfg.metaModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.claudeModel.replace(/-\d{8}$/,""); }
+  function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "meta" ? cfg.metaModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.provider === "lueur" ? cfg.lueurModel.replace(/^local:/, "") + " · PC" :cfg.claudeModel.replace(/-\d{8}$/,""); }
   syncPill();
   function renderLists(){
     const fill = (ul, arr, key) => {
@@ -2109,8 +2184,8 @@ textarea::placeholder{color:var(--ink-3)}
   });
   const INSTALL_MSG = "Maintenant : touche Partager › Sur l'écran d'accueil › Ajouter. L'icône gardera tes clés, même si tu la supprimes puis la réinstalles de la même façon.";
   async function keysLink(){
-    const pack = { c: cfg.claudeKey.trim(), d: cfg.dsKey.trim(), e: cfg.elKey.trim(), ...(cfg.tsKey.trim() ? { t: cfg.tsKey.trim() } : {}), ...(cfg.metaKey.trim() ? { m: cfg.metaKey.trim() } : {}), ...(cfg.dsBase && cfg.dsBase !== "https://api.deepseek.com" ? { b: cfg.dsBase } : {}) };
-    if(!pack.c && !pack.d && !pack.e){ addMsg("sys", "Colle d'abord au moins une clé."); return ""; }
+    const pack = { c: cfg.claudeKey.trim(), d: cfg.dsKey.trim(), e: cfg.elKey.trim(), ...(cfg.tsKey.trim() ? { t: cfg.tsKey.trim() } : {}), ...(cfg.metaKey.trim() ? { m: cfg.metaKey.trim() } : {}), ...(lueurOn() ? { l: cfg.lueurUrl.trim(), k: cfg.lueurKey.trim() } : {}),...(cfg.dsBase && cfg.dsBase !== "https://api.deepseek.com" ? { b: cfg.dsBase } : {}) };
+    if(!pack.c && !pack.d && !pack.e && !pack.k){ addMsg("sys", "Colle d'abord au moins une clé."); return ""; }
     const pin = prompt("Choisis un code pour protéger ce lien (au moins 6 caractères). Il te sera demandé si Jarvis doit remettre tes clés :");
     if(pin === null) return "";
     if(pin.length < 6){ addMsg("sys", "Code trop court : 6 caractères minimum."); return ""; }
@@ -2125,7 +2200,7 @@ textarea::placeholder{color:var(--ink-3)}
   };
   $("webSel").onchange = e => { cfg.web = e.target.value === "1"; saveCfg(); };
   $("voiceSel").onchange = e => { cfg.voice = e.target.value; saveCfg(); speak("Voix sélectionnée.", true); };
-  $("provPill").onclick = () => { const order = ["auto","claude","deepseek","meta","local"]; cfg.provider = order[(order.indexOf(cfg.provider) + 1) % order.length]; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + PROV_LABEL[cfg.provider]); };
+  $("provPill").onclick = () => { const order = ["auto","claude","deepseek","meta","local","lueur"]; cfg.provider = order[(order.indexOf(cfg.provider) + 1) % order.length]; saveCfg(); syncPill(); addMsg("sys", "Modèle : " + PROV_LABEL[cfg.provider]); };
   $("localLoad").onclick = async () => {
     const b = $("localLoad"); b.disabled = true;
     try{
