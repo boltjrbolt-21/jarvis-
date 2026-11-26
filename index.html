@@ -333,8 +333,10 @@ textarea::placeholder{color:var(--ink-3)}
         <option value="ios">Voix de l'iPhone (gratuite)</option>
         <option value="eleven">ElevenLabs (voix humaine)</option>
         <option value="piper">Voix française hors ligne (Piper, gratuite)</option>
+        <option value="lueur">Lueur · Kyutai, façon Moshi (voix Estelle + écoute en continu, sur ton PC)</option>
       </select>
     </label>
+    <span class="note" id="lueurVoixNote" style="display:block;padding-block:6px">Ton PC écoute en continu (Kyutai STT) et répond dès que tu as fini ta phrase, sans attendre un silence. Tu peux couper Jarvis en parlant ; « oui », « hmm » ne le coupent pas. Il faut l'adresse et le jeton de Lueur (Cerveau), Tailscale actif et Lueur lancé sur le PC.</span>
     <div id="piperBox">
       <label>Voix Piper
         <select id="piperVoice">
@@ -752,14 +754,34 @@ textarea::placeholder{color:var(--ink-3)}
 
   const useEleven = () => cfg.tts === "eleven" && !!cfg.elKey.trim();
   const usePiper = () => cfg.tts === "piper";
-  const neural = () => useEleven() || usePiper();          // voices played as audio files through <audio>
-  const fetchVoice = text => useEleven() ? elFetch(text) : piperFetch(text);
+  const useKyutai = () => cfg.tts === "lueur" && lueurOn();   // Kyutai on Kévin's PC: Estelle voice + streaming ears
+  const neural = () => useEleven() || usePiper() || useKyutai();          // voices played as audio files through <audio>
+  const fetchVoice = text => useEleven() ? elFetch(text) : useKyutai() ? kyutaiFetch(text) : piperFetch(text);
+  // ---- Estelle (Pocket TTS on the PC): PCM streamed by Lueur, wrapped in a WAV for the <audio> player ----
+  function kyutaiFetch(text){
+    const p = (async () => {
+      let r;
+      try{
+        r = await fetch(cfg.lueurUrl.trim().replace(/\/+$/, "") + "/api/voix/tts", { method:"POST", signal: elCtl.signal,
+          headers:{ "content-type":"application/json", "authorization":"Bearer " + cfg.lueurKey.trim() }, body: JSON.stringify({ texte: text }) });
+      }catch(err){ throw err.name === "AbortError" ? err : new Error("voix Kyutai injoignable (PC, Tailscale ?)"); }
+      if(!r.ok) throw new Error("voix Kyutai : erreur " + r.status);
+      const pcm = new Uint8Array(await r.arrayBuffer()), h = new DataView(new ArrayBuffer(44));
+      const str = (o, s) => [...s].forEach((c, i) => h.setUint8(o + i, c.charCodeAt(0)));
+      str(0, "RIFF"); h.setUint32(4, 36 + pcm.length, true); str(8, "WAVEfmt "); h.setUint32(16, 16, true); h.setUint16(20, 1, true); h.setUint16(22, 1, true);
+      h.setUint32(24, 24000, true); h.setUint32(28, 48000, true); h.setUint16(32, 2, true); h.setUint16(34, 16, true); str(36, "data"); h.setUint32(40, pcm.length, true);
+      return URL.createObjectURL(new Blob([h.buffer, pcm], { type:"audio/wav" }));
+    })();
+    p.catch(() => {});
+    return p;
+  }
   const queue = []; let speaking = false, started = false, ttsGen = 0, elCtl = new AbortController();
+  let ky = null, nowSpoken = "";   // Kyutai listening session; text Jarvis is saying (to ignore its own echo)
   function chunkText(text){
     const clean = speakMath(text).replace(/[*_#`>|]/g,"").replace(/https?:\/\/\S+/g,"").replace(/\[[^\]]*\]\([^)]*\)/g,"").trim();
     // cut only at sentence ends, and keep chunks long: fewer breaks = smoother speech
     const parts = clean.split(/(?<=[.!?…])\s+|\n+/).filter(p => p.trim());
-    const max = useEleven() ? 400 : usePiper() ? 200 : 240;
+    const max = useEleven() ? 400 : usePiper() || useKyutai() ? 200 : 240;
     const out = []; let buf = "";
     for(const p of parts){ if(buf && (buf + " " + p).length > max){ out.push(buf); buf = p; } else buf = buf ? buf + " " + p : p; }
     if(buf.trim()) out.push(buf.trim());
@@ -774,7 +796,7 @@ textarea::placeholder{color:var(--ink-3)}
       showUnlockHint(true); return;
     }
     const parts = chunkText(text); if(!parts.length) return;
-    setAudioMode("playback");
+    setAudioMode(ky ? "play-and-record" : "playback");   // Kyutai keeps the mic open while Jarvis speaks
     queue.push(...parts.map(t => ({ text: t, p: null })));
     if(eleven && !queue[0].p) queue[0].p = fetchVoice(queue[0].text);   // start fetching at once
     if(!speaking){
@@ -863,7 +885,8 @@ textarea::placeholder{color:var(--ink-3)}
     if(gen !== ttsGen){ URL.revokeObjectURL(url); return; }
     const done = () => { URL.revokeObjectURL(url); player.onended = player.onerror = null; if(gen === ttsGen) speakNext(); };
     player.onended = done;
-    const who = usePiper() ? "Piper" : "ElevenLabs";
+    const who = usePiper() ? "Piper" : useKyutai() ? "Kyutai" : "ElevenLabs";
+    nowSpoken = item.text + " " + (queue[0]?.text || "");
     player.onerror = () => { diag.voix = who + " : lecture impossible"; done(); };
     player.src = url;
     // ElevenLabs takes the speed in its request; Piper's audio is sped up at playback
@@ -918,7 +941,82 @@ textarea::placeholder{color:var(--ink-3)}
     $("micBtn").classList.toggle("live", listening);
     $("micBtn").setAttribute("aria-pressed", String(conv));
   }
+  // ---- Kyutai (façon Moshi) : the mic streams continuously to Lueur on the PC; words come back live and the
+  // model itself says when Kévin has finished his sentence (semantic end of turn, ~0.4 s, no silence timer) ----
+  const ACQ = /^\W*(oui|ouais|ok|okay|d'accord|mh+|hm+|mm+|ah|oh|euh|voilà|exact|super)\W*$/i;
+  const norm = s => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ");
+  // the iPhone's speaker leaks into the mic: words that are mostly what Jarvis is saying are its own echo
+  const isEcho = t => { const ref = norm(nowSpoken), w = norm(t).split(/\s+/).filter(x => x.length > 2); return w.length > 0 && w.filter(x => ref.includes(x)).length / w.length >= .6; };
+  async function startKyutai(){
+    if(ky) return;
+    const me = ky = {};
+    try{
+      setAudioMode("play-and-record");
+      const stream = await navigator.mediaDevices.getUserMedia({ audio:{ channelCount:1, echoCancellation:true, noiseSuppression:true, autoGainControl:true } });
+      if(ky !== me){ stream.getTracks().forEach(t => t.stop()); return; }
+      me.stream = stream;
+      if(!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      await actx.resume?.();
+      const ws = me.ws = new WebSocket(cfg.lueurUrl.trim().replace(/\/+$/, "").replace(/^http/, "ws") + "/api/voix/flux", ["lueur", cfg.lueurKey.trim()]);
+      ws.binaryType = "arraybuffer";
+      setMode("thinking", "Chargement de l'écoute Kyutai sur ton PC…");
+      ws.onmessage = e => { if(ky === me) kyutaiMsg(me, JSON.parse(e.data)); };
+      ws.onclose = () => {
+        if(ky !== me) return;
+        stopKyutai(); conv = false; setMicUI();
+        addMsg("sys", "Écoute Kyutai coupée : PC éteint, Tailscale inactif ou Lueur arrêté.");
+        setMode("idle", "Touche le micro pour parler.");
+      };
+      // the PC wants mono Float32 at 24 kHz: linear resampling from the phone's rate (48 kHz → exactly 1 in 2)
+      const src = me.src = actx.createMediaStreamSource(stream), proc = me.proc = actx.createScriptProcessor(4096, 1, 1);
+      const mute = me.mute = actx.createGain(); mute.gain.value = 0;
+      const ratio = actx.sampleRate / 24000; let pos = 0;
+      proc.onaudioprocess = ev => {
+        if(ws.readyState !== 1 || !me.pret) return;
+        const x = ev.inputBuffer.getChannelData(0), n = Math.max(0, Math.floor((x.length - pos) / ratio)), out = new Float32Array(n);
+        for(let i = 0; i < n; i++){ const p = pos + i * ratio, k = Math.floor(p), f = p - k; out[i] = x[k] * (1 - f) + (x[k + 1] ?? x[k]) * f; }
+        pos += n * ratio - x.length;
+        if(ws.bufferedAmount < 96000) ws.send(out.buffer);
+      };
+      src.connect(proc); proc.connect(mute); mute.connect(actx.destination);
+    }catch(e){
+      if(ky === me){ stopKyutai(); conv = false; setMicUI(); addMsg("sys", "Micro ou écoute Kyutai indisponible : " + e.message); setMode("idle", "Touche le micro pour parler."); }
+    }
+  }
+  function stopKyutai(){
+    const me = ky; ky = null; if(!me) return;
+    try{ me.ws && (me.ws.onclose = null, me.ws.close()); }catch{}
+    me.stream?.getTracks().forEach(t => t.stop());
+    if(me.proc) me.proc.onaudioprocess = null;
+    try{ me.src?.disconnect(); me.proc?.disconnect(); me.mute?.disconnect(); }catch{}
+    listening = false; setMicUI();
+  }
+  async function sendWhenFree(t){
+    if(busy){ ctl?.abort(); for(let i = 0; i < 40 && busy; i++) await new Promise(r => setTimeout(r, 50)); }
+    send(t);
+  }
+  function kyutaiMsg(me, m){
+    if(m.type === "pret"){ me.pret = true; listening = true; setMicUI(); diag.micro = "Kyutai OK"; setMode("listening", "Parle naturellement : je réponds dès que tu as fini, et tu peux me couper."); return; }
+    if(m.type === "etat"){ setMode("thinking", m.v); return; }
+    if(m.type === "erreur"){ addMsg("sys", m.v); return; }
+    if(m.type === "mot"){
+      if(speaking && isEcho(m.texte)) return;
+      // barge-in: two real words while Jarvis talks or thinks = Kévin takes the floor back
+      if((speaking || busy) && m.texte.split(/\s+/).length >= 2 && !ACQ.test(m.texte)){ stopSpeaking(); ctl?.abort(); }
+      input.value = m.texte; autosize();
+      if(!speaking && !busy) setMode("listening", "…");
+      return;
+    }
+    if(m.type === "fin"){
+      const t = (m.texte || "").trim();
+      if(!t || (speaking && (isEcho(t) || ACQ.test(t)))) return;
+      input.value = ""; autosize();
+      if(isStop(t)){ stopSpeaking(); afterSpeech(); return; }
+      stopSpeaking(); sendWhenFree(t);
+    }
+  }
   function startListening(){
+    if(useKyutai()){ if(conv && !ky) startKyutai(); return; }
     if(!SR || !conv || listening || busy || speaking) return;
     try{
       setAudioMode("play-and-record");
@@ -954,7 +1052,7 @@ textarea::placeholder{color:var(--ink-3)}
   const isStop = t => STOP_RE.test(t.trim().replace(/^(jarvis|ok|bon)[\s,]+/i, ""));
   let stopRec = null;
   function startStopWatch(){
-    if(!SR || cfg.stopWord === "0" || !conv || stopRec) return;
+    if(ky || !SR || cfg.stopWord === "0" || !conv || stopRec) return;   // Kyutai already hears "stop"
     try{
       setAudioMode("play-and-record");
       const r = new SR(); r.lang = "fr-FR"; r.interimResults = true; r.continuous = true;
@@ -971,7 +1069,8 @@ textarea::placeholder{color:var(--ink-3)}
     }catch{ stopRec = null; }
   }
   function stopWatch(){ const r = stopRec; stopRec = null; if(r){ try{ r.onend = r.onresult = null; r.abort(); }catch{} } }
-  function stopListening(){ clearTimeout(silenceT); if(rec){ try{ rec.onend = () => { listening = false; setMicUI(); }; rec.abort(); }catch{} } rec = null; listening = false; setMicUI(); }
+  function stopListening(){ if(ky) return;   // Kyutai stays open the whole conversation (full duplex)
+    clearTimeout(silenceT); if(rec){ try{ rec.onend = () => { listening = false; setMicUI(); }; rec.abort(); }catch{} } rec = null; listening = false; setMicUI(); }
   function commitSpeech(){
     clearTimeout(silenceT);
     const t = (input.value || heard).trim(); heard = "";
@@ -983,6 +1082,11 @@ textarea::placeholder{color:var(--ink-3)}
   }
   $("micBtn").onclick = () => {
     unlockAudio();
+    if(useKyutai()){
+      conv = !conv; setMicUI();
+      if(conv){ stopSpeaking(); startKyutai(); } else { stopKyutai(); setMode("idle", "Touche le micro pour parler."); }
+      return;
+    }
     if(!SR){ addMsg("sys", "La reconnaissance vocale n'est pas disponible ici. Ouvre la page dans Safari, ou utilise la touche micro du clavier."); return; }
     conv = !conv; setMicUI();
     if(conv){ stopSpeaking(); startListening(); }
@@ -2083,7 +2187,7 @@ textarea::placeholder{color:var(--ink-3)}
 
   // ================= settings =================
   const fields = ["provider","claudeKey","claudeModel","dsKey","dsModel","dsBase","persona","rate","silence","tts","elKey","elModel","elVoice","autoListen","stopWord","localModel","expert","pharma","coach","brief","appleShortcut","localSpec","piperVoice","tsKey","metaKey","metaModel","lueurUrl","lueurKey","lueurModel"];
-  const syncTts = () => { const t = $("tts").value; $("elBox").hidden = t !== "eleven"; $("piperBox").hidden = t !== "piper"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = t !== "ios"; };
+  const syncTts = () => { const t = $("tts").value; $("elBox").hidden = t !== "eleven"; $("piperBox").hidden = t !== "piper"; $("lueurVoixNote").hidden = t !== "lueur"; $("voiceSel").closest("label").hidden = $("iosHint").hidden = t !== "ios"; };
   $("piperLoad").onclick = async () => {
     const b = $("piperLoad"); b.disabled = true;
     try{
@@ -2092,7 +2196,7 @@ textarea::placeholder{color:var(--ink-3)}
     }catch(e){ b.textContent = "Télécharger la voix (≈ 60 Mo, une seule fois)"; addMsg("sys", "Voix Piper : " + e.message); }
     b.disabled = false;
   };
-  $("tts").addEventListener("change", () => { stopSpeaking(); syncTts(); });
+  $("tts").addEventListener("change", () => { stopSpeaking(); if(ky){ stopKyutai(); conv = false; setMicUI(); } syncTts(); });
   function syncPill(){ $("provPill").textContent = PROV_LABEL[cfg.provider] || "Claude"; $("modeInfo").textContent = cfg.provider === "auto" ? "équipe : " + cfg.claudeModel.replace(/^claude-|-\d{8}$/g,"") + (cfg.expert !== "none" ? " + " + cfg.expert.replace(/^claude-/,"") : "") : cfg.provider === "deepseek" ? cfg.dsModel : cfg.provider === "meta" ? cfg.metaModel : cfg.provider === "local" ? cfg.localModel + " · local" : cfg.provider === "lueur" ? cfg.lueurModel.replace(/^local:/, "") + " · PC" :cfg.claudeModel.replace(/-\d{8}$/,""); }
   syncPill();
   function renderLists(){
@@ -2316,8 +2420,9 @@ Documentation complète : ${location.origin + location.pathname.replace(/[^/]*$/
   const wantsAutoListen = () => cfg.autoListen === "1" || /[?&#]ecoute\b/.test(location.search + location.hash);
   function autoListen(){
     if(!$("lock").hidden) return;   // never listen behind the lock screen
-    if(!SR || !wantsAutoListen() || keyMissing() || conv || busy || speaking) return;
+    if((!SR && !useKyutai()) || !wantsAutoListen() || keyMissing() || conv || busy || speaking) return;
     conv = true; setMicUI(); startListening();
+    if(useKyutai()) return;   // Kyutai reports its own errors; its model takes ~10 s to load on the PC
     if(!unlocked) showUnlockHint(true);
     setTimeout(() => { if(conv && !listening && !busy && !speaking){ conv = false; setMicUI(); setMode("idle", "Touche le micro pour parler."); } }, 2500);
   }
